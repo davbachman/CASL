@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Compass &amp; Straightedge Lab</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="menu-bar">
+        <div class="app-title">Compass &amp; Straightedge Lab</div>
+        <div class="menu-group">
+          <label class="menu-label" for="geometrySelect">Geometry</label>
+          <select id="geometrySelect" class="menu-select">
+            <option value="euclidean" selected>Euclidean</option>
+            <option value="inversive_euclidean">Inversive Euclidean</option>
+            <option value="spherical">Spherical</option>
+            <option value="hyperbolic_poincare">Hyperbolic (Poincar&eacute; disk)</option>
+            <option value="hyperbolic_half_plane">Hyperbolic (Half-plane)</option>
+          </select>
+        </div>
+        <div class="menu-spacer"></div>
+        <div id="statusText" class="status-text"></div>
+      </header>
+
+      <div class="main">
+        <aside class="sidebar">
+          <div class="sidebar-title">Tools</div>
+          <div class="tool-list" role="group" aria-label="Tools">
+            <button class="tool-btn is-active" data-tool="line" type="button">Line</button>
+            <button class="tool-btn" data-tool="circle" type="button">Circle</button>
+            <button class="tool-btn" data-tool="intersect" type="button">Intersect</button>
+          </div>
+          <div id="toolHint" class="tool-hint"></div>
+          <div class="sidebar-footer">
+            <div class="hint-title">Controls</div>
+            <ul class="hint-list">
+              <li>Drag point: move</li>
+              <li>Drag background: pan / rotate sphere</li>
+              <li>Wheel: zoom</li>
+              <li>Right-click: style &amp; label</li>
+            </ul>
+          </div>
+        </aside>
+
+        <main class="canvas-pane">
+          <canvas id="canvas" aria-label="Geometry canvas"></canvas>
+          <div id="contextMenu" class="context-menu is-hidden"></div>
+        </main>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
+
