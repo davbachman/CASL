@@ -71,6 +71,25 @@ body {
   font-size: 13px;
 }
 
+.menu-btn {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.menu-btn:hover:not(:disabled) {
+  border-color: #b8c2cc;
+}
+
+.menu-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .menu-spacer {
   flex: 1;
 }
@@ -257,4 +276,3 @@ body {
   background: var(--accent);
   color: #fff;
 }
-

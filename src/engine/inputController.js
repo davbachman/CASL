@@ -16,7 +16,8 @@ import { dot3, norm3 } from "./vec3.js";
  *  getState: () => AppState,
  *  requestRender: () => void,
  *  openContextMenu: (pos: {x:number,y:number}, target: {kind:"point"|"line"|"circle", id:string}) => void,
- *  closeContextMenu: () => void
+ *  closeContextMenu: () => void,
+ *  pushHistory: () => void
  * }} deps
  */
 export function attachCanvasController(canvas, deps) {
@@ -26,6 +27,8 @@ export function attachCanvasController(canvas, deps) {
   let downAt = null;
   /** @type {boolean} */
   let moved = false;
+  /** @type {boolean} */
+  let didPushHistoryForAction = false;
   const dragThresholdPx = 3;
 
   const getCSSPos = (e) => {
@@ -69,6 +72,7 @@ export function attachCanvasController(canvas, deps) {
     const pos = getCSSPos(e);
     downAt = pos;
     moved = false;
+    didPushHistoryForAction = false;
 
     const state = deps.getState();
     const geom = state.activeGeometry;
@@ -103,20 +107,28 @@ export function attachCanvasController(canvas, deps) {
     if (action.kind === "point") {
       const p = doc.points.find((pt) => pt.id === action.pointId);
       if (!p || p.locked) return;
+      if (!didPushHistoryForAction) {
+        deps.pushHistory();
+        didPushHistoryForAction = true;
+      }
       if (geom === GeometryType.SPHERICAL) {
         const rect = canvas.getBoundingClientRect();
         const vp = sphereViewport(/** @type {any} */ (view), rect.width, rect.height);
         const q = screenToSpherePoint(/** @type {any} */ (view), pos, vp);
         if (!q) return;
-        p.x = q.x;
-        p.y = q.y;
-        p.z = q.z;
+        const constrained = applySphereConstraints(doc, p, q);
+        p.x = constrained.x;
+        p.y = constrained.y;
+        p.z = constrained.z;
+        enforceSphereConstraints(doc);
       } else {
         const wPos = screenToWorld(/** @type {any} */ (view), pos);
         const constrained = constrain2DPoint(geom, wPos);
         if (!constrained) return;
-        p.x = constrained.x;
-        p.y = constrained.y;
+        const snapped = apply2DConstraints(geom, doc, p, constrained);
+        p.x = snapped.x;
+        p.y = snapped.y;
+        enforce2DConstraints(geom, doc);
       }
       deps.requestRender();
       return;
@@ -137,12 +149,12 @@ export function attachCanvasController(canvas, deps) {
       // Treat as a click
       if (state.activeTool === ToolType.INTERSECT) {
         const obj = hitTestCurve(state, geom, pos, canvas);
-        if (obj) onIntersectClick(state, geom, doc, obj, view, canvas);
+        if (obj) onIntersectClick(state, geom, doc, obj, view, canvas, deps.pushHistory);
       } else {
-        const pointId = getOrCreatePointAtClick(state, geom, doc, view, pos, canvas);
-        if (pointId) {
-          if (state.activeTool === ToolType.LINE) onLineClick(state, doc, pointId);
-          if (state.activeTool === ToolType.CIRCLE) onCircleClick(state, doc, pointId);
+        const hit = getOrCreatePointAtClick(state, geom, doc, view, pos, canvas, deps.pushHistory);
+        if (hit) {
+          if (state.activeTool === ToolType.LINE) onLineClick(state, doc, hit.id, hit.created, deps.pushHistory);
+          if (state.activeTool === ToolType.CIRCLE) onCircleClick(state, doc, hit.id, hit.created, deps.pushHistory);
         }
       }
       deps.requestRender();
@@ -311,28 +323,44 @@ function hitTestCurve(state, geom, pos, canvas) {
  * @param {any} view
  * @param {{x:number,y:number}} pos
  * @param {HTMLCanvasElement} canvas
- * @returns {string | null}
+ * @param {() => void} pushHistory
+ * @returns {{id:string, created:boolean} | null}
  */
-function getOrCreatePointAtClick(state, geom, doc, view, pos, canvas) {
+function getOrCreatePointAtClick(state, geom, doc, view, pos, canvas, pushHistory) {
   const hit = hitTestPoint(state, geom, pos, canvas);
-  if (hit) return hit.id;
+  if (hit) return { id: hit.id, created: false };
 
   if (geom === GeometryType.SPHERICAL) {
     const rect = canvas.getBoundingClientRect();
     const vp = sphereViewport(/** @type {any} */ (view), rect.width, rect.height);
     const p = screenToSpherePoint(/** @type {any} */ (view), pos, vp);
     if (!p) return null;
-    return createSpherePoint(doc, p);
+    const snapped = snapSpherePointToCurves(doc, /** @type {any} */ (view), vp, pos, p);
+    pushHistory();
+    return {
+      id: createSpherePoint(doc, snapped?.point ?? p, snapped ? [snapped.constraint] : undefined),
+      created: true,
+    };
   }
 
   const v2d = /** @type {any} */ (view);
   const w = screenToWorld(v2d, pos);
   if (!is2DPointInDomain(geom, w)) return null;
-  return create2DPoint(doc, w);
+  const snapped = snap2DPointToCurves(geom, doc, v2d, pos, w);
+  pushHistory();
+  return {
+    id: create2DPoint(doc, snapped?.point ?? w, snapped ? [snapped.constraint] : undefined),
+    created: true,
+  };
 }
 
-/** @param {any} doc @param {{x:number,y:number}} w */
-function create2DPoint(doc, w) {
+/**
+ * @param {any} doc
+ * @param {{x:number,y:number}} w
+ * @param {Array<{kind:"line"|"circle", id:string}> | undefined} constraints
+ * @param {Array<{id:string, mode:"line"|"angle", value:number}> | undefined} intersectionHints
+ */
+function create2DPoint(doc, w, constraints, intersectionHints) {
   const id = makeId("p", doc.nextId++);
   const label = nextPointLabel(doc);
   doc.points.push({
@@ -340,13 +368,19 @@ function create2DPoint(doc, w) {
     label,
     x: w.x,
     y: w.y,
+    constraints: constraints && constraints.length > 0 ? constraints : undefined,
+    intersectionHints: intersectionHints && intersectionHints.length > 0 ? intersectionHints : undefined,
     style: { color: "#111111", opacity: 1 },
   });
   return id;
 }
 
-/** @param {any} doc @param {{x:number,y:number,z:number}} p */
-function createSpherePoint(doc, p) {
+/**
+ * @param {any} doc
+ * @param {{x:number,y:number,z:number}} p
+ * @param {Array<{kind:"line"|"circle", id:string}> | undefined} constraints
+ */
+function createSpherePoint(doc, p, constraints) {
   const id = makeId("p", doc.nextId++);
   const label = nextPointLabel(doc);
   const u = norm3(p);
@@ -356,13 +390,14 @@ function createSpherePoint(doc, p) {
     x: u.x,
     y: u.y,
     z: u.z,
+    constraints: constraints && constraints.length > 0 ? constraints : undefined,
     style: { color: "#111111", opacity: 1 },
   });
   return id;
 }
 
 /** @param {AppState} state @param {any} doc @param {string} pointId */
-function onLineClick(state, doc, pointId) {
+function onLineClick(state, doc, pointId, historyAlreadyPushed, pushHistory) {
   if (!state.pending || state.pending.tool !== ToolType.LINE) {
     state.pending = { tool: ToolType.LINE, firstPointId: pointId };
     return;
@@ -373,6 +408,7 @@ function onLineClick(state, doc, pointId) {
   state.pending = null;
   if (first === second) return;
 
+  if (!historyAlreadyPushed) pushHistory();
   const id = makeId("l", doc.nextId++);
   const label = nextCurveLabel(doc);
   doc.lines.push({
@@ -385,7 +421,7 @@ function onLineClick(state, doc, pointId) {
 }
 
 /** @param {AppState} state @param {any} doc @param {string} pointId */
-function onCircleClick(state, doc, pointId) {
+function onCircleClick(state, doc, pointId, historyAlreadyPushed, pushHistory) {
   if (!state.pending || state.pending.tool !== ToolType.CIRCLE) {
     state.pending = { tool: ToolType.CIRCLE, firstPointId: pointId };
     return;
@@ -396,6 +432,7 @@ function onCircleClick(state, doc, pointId) {
   state.pending = null;
   if (center === radiusPoint) return;
 
+  if (!historyAlreadyPushed) pushHistory();
   const id = makeId("c", doc.nextId++);
   const label = nextCurveLabel(doc);
   doc.circles.push({
@@ -412,8 +449,11 @@ function onCircleClick(state, doc, pointId) {
  * @param {GeometryType} geom
  * @param {any} doc
  * @param {{kind:"line"|"circle", id:string}} obj
+ * @param {any} view
+ * @param {HTMLCanvasElement} canvas
+ * @param {() => void} pushHistory
  */
-function onIntersectClick(state, geom, doc, obj, view, canvas) {
+function onIntersectClick(state, geom, doc, obj, view, canvas, pushHistory) {
   if (!state.pending || state.pending.tool !== ToolType.INTERSECT) {
     state.pending = { tool: ToolType.INTERSECT, firstObject: obj };
     state.selection = obj;
@@ -438,7 +478,12 @@ function onIntersectClick(state, geom, doc, obj, view, canvas) {
     const rect = canvas.getBoundingClientRect();
     const vp = sphereViewport(/** @type {any} */ (view), rect.width, rect.height);
     const newPts = filterNewSpherePoints(doc, /** @type {any} */ (view), vp, hits, 10);
-    for (const p of newPts) createSpherePoint(doc, p);
+    if (newPts.length > 0) pushHistory();
+    const constraints = [
+      { kind: a.kind, id: a.id },
+      { kind: b.kind, id: b.id },
+    ];
+    for (const p of newPts) createSpherePoint(doc, p, constraints);
     return;
   }
 
@@ -452,7 +497,15 @@ function onIntersectClick(state, geom, doc, obj, view, canvas) {
 
   const hits = intersectCurves(curveA, curveB).filter((p) => is2DPointInDomain(geom, p));
   const newPts = filterNew2DPoints(doc, /** @type {any} */ (view), hits, 10);
-  for (const p of newPts) create2DPoint(doc, p);
+  if (newPts.length > 0) pushHistory();
+  const constraints = [
+    { kind: a.kind, id: a.id },
+    { kind: b.kind, id: b.id },
+  ];
+  for (const p of newPts) {
+    const hints = buildIntersectionHints(geom, doc, constraints, p);
+    create2DPoint(doc, p, constraints, hints);
+  }
 }
 
 /**
@@ -521,4 +574,425 @@ function filterNewSpherePoints(doc, view, vp, hits, thresholdPx) {
 function sphereViewport(view, cssW, cssH) {
   const baseR = Math.min(cssW, cssH) * 0.38;
   return { cx: cssW / 2, cy: cssH / 2, r: baseR * view.zoom };
+}
+
+/**
+ * Apply curve constraints to a dragged 2D point.
+ *
+ * @param {GeometryType} geom
+ * @param {any} doc
+ * @param {{constraints?: Array<{kind:"line"|"circle", id:string}>}} point
+ * @param {{x:number,y:number}} w
+ * @returns {{x:number,y:number}}
+ */
+function apply2DConstraints(geom, doc, point, w) {
+  const constraints = point.constraints;
+  if (!constraints || constraints.length === 0) return w;
+
+  if (constraints.length >= 2) {
+    const a = get2DCurveFromConstraint(geom, doc, constraints[0]);
+    const b = get2DCurveFromConstraint(geom, doc, constraints[1]);
+    if (a && b) {
+      const hits = intersectCurves(a, b).filter((p) => is2DPointInDomain(geom, p));
+      if (hits.length > 0) {
+        const hints = point.intersectionHints;
+        if (hints && hints.length > 0) {
+          const hintMap = new Map(hints.map((h) => [h.id, h]));
+          let best = null;
+          let bestScore = Infinity;
+          for (const h of hits) {
+            let score = 0;
+            let used = false;
+            const hA = hintMap.get(constraints[0].id);
+            if (hA) {
+              const d = curveParamDiff(a, hA, h);
+              if (d != null) {
+                score += d * d;
+                used = true;
+              }
+            }
+            const hB = hintMap.get(constraints[1].id);
+            if (hB) {
+              const d = curveParamDiff(b, hB, h);
+              if (d != null) {
+                score += d * d;
+                used = true;
+              }
+            }
+            if (used && score < bestScore) {
+              bestScore = score;
+              best = h;
+            }
+          }
+          if (best) return best;
+        }
+        let best = hits[0];
+        let bestD = Infinity;
+        for (const h of hits) {
+          const dx = h.x - w.x;
+          const dy = h.y - w.y;
+          const d = dx * dx + dy * dy;
+          if (d < bestD) {
+            bestD = d;
+            best = h;
+          }
+        }
+        return best;
+      }
+    }
+  }
+
+  /** @type {{x:number,y:number} | null} */
+  let best = null;
+  let bestD = Infinity;
+  for (const c of constraints) {
+    if (c.kind === "line") {
+      const line = doc.lines.find((l) => l.id === c.id);
+      if (!line) continue;
+      const curve = derive2DLineCurve(geom, doc, line);
+      if (!curve) continue;
+      const proj = projectWorldToCurve(curve, w);
+      if (!proj || !is2DPointInDomain(geom, proj)) continue;
+      const d = (proj.x - w.x) * (proj.x - w.x) + (proj.y - w.y) * (proj.y - w.y);
+      if (d < bestD) {
+        bestD = d;
+        best = proj;
+      }
+      continue;
+    }
+    const circle = doc.circles.find((ci) => ci.id === c.id);
+    if (!circle) continue;
+    const curve = derive2DCircleCurve(geom, doc, circle);
+    if (!curve) continue;
+    const proj = projectWorldToCurve(curve, w);
+    if (!proj || !is2DPointInDomain(geom, proj)) continue;
+    const d = (proj.x - w.x) * (proj.x - w.x) + (proj.y - w.y) * (proj.y - w.y);
+    if (d < bestD) {
+      bestD = d;
+      best = proj;
+    }
+  }
+  return best ?? w;
+}
+
+/**
+ * Apply curve constraints to a dragged spherical point.
+ *
+ * @param {any} doc
+ * @param {{constraints?: Array<{kind:"line"|"circle", id:string}>}} point
+ * @param {{x:number,y:number,z:number}} p
+ * @returns {{x:number,y:number,z:number}}
+ */
+function applySphereConstraints(doc, point, p) {
+  const constraints = point.constraints;
+  if (!constraints || constraints.length === 0) return p;
+
+  if (constraints.length >= 2) {
+    const a = getSpherePlaneFromConstraint(doc, constraints[0]);
+    const b = getSpherePlaneFromConstraint(doc, constraints[1]);
+    if (a && b) {
+      const hits = intersectSpherePlanes(a, b);
+      if (hits.length > 0) {
+        let best = norm3(hits[0]);
+        let bestDot = dot3(best, p);
+        for (let i = 1; i < hits.length; i++) {
+          const h = norm3(hits[i]);
+          const d = dot3(h, p);
+          if (d > bestDot) {
+            bestDot = d;
+            best = h;
+          }
+        }
+        return best;
+      }
+    }
+  }
+
+  /** @type {{x:number,y:number,z:number} | null} */
+  let best = null;
+  let bestDot = -Infinity;
+  for (const c of constraints) {
+    if (c.kind === "line") {
+      const line = doc.lines.find((l) => l.id === c.id);
+      if (!line) continue;
+      const plane = deriveSphereGreatCircle(doc, line);
+      if (!plane) continue;
+      const proj = closestPointOnSpherePlaneCircle(p, plane);
+      const dot = dot3(p, proj);
+      if (dot > bestDot) {
+        bestDot = dot;
+        best = proj;
+      }
+      continue;
+    }
+    const circle = doc.circles.find((ci) => ci.id === c.id);
+    if (!circle) continue;
+    const plane = deriveSphereCircle(doc, circle);
+    if (!plane) continue;
+    const proj = closestPointOnSpherePlaneCircle(p, plane);
+    const dot = dot3(p, proj);
+    if (dot > bestDot) {
+      bestDot = dot;
+      best = proj;
+    }
+  }
+  return best ?? p;
+}
+
+/**
+ * Build per-constraint intersection hints to keep identity stable when curves move.
+ *
+ * @param {GeometryType} geom
+ * @param {any} doc
+ * @param {Array<{kind:"line"|"circle", id:string}>} constraints
+ * @param {{x:number,y:number}} p
+ * @returns {Array<{id:string, mode:"line"|"angle", value:number}> | undefined}
+ */
+function buildIntersectionHints(geom, doc, constraints, p) {
+  /** @type {Array<{id:string, mode:"line"|"angle", value:number}>} */
+  const out = [];
+  for (const c of constraints) {
+    const curve = get2DCurveFromConstraint(geom, doc, c);
+    if (!curve) continue;
+    if (curve.kind === "line") {
+      const value = lineParamOnCurve(curve, p);
+      if (!Number.isFinite(value)) continue;
+      out.push({ id: c.id, mode: "line", value });
+    } else {
+      const value = Math.atan2(p.y - curve.cy, p.x - curve.cx);
+      if (!Number.isFinite(value)) continue;
+      out.push({ id: c.id, mode: "angle", value });
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * @param {import("./geom2d.js").Curve2D} curve
+ * @param {{id:string, mode:"line"|"angle", value:number}} hint
+ * @param {{x:number,y:number}} p
+ * @returns {number | null}
+ */
+function curveParamDiff(curve, hint, p) {
+  if (hint.mode === "line") {
+    if (curve.kind !== "line") return null;
+    const t = lineParamOnCurve(curve, p);
+    if (!Number.isFinite(t)) return null;
+    return t - hint.value;
+  }
+  if (curve.kind !== "circle") return null;
+  const ang = Math.atan2(p.y - curve.cy, p.x - curve.cx);
+  if (!Number.isFinite(ang)) return null;
+  return angleDiff(ang, hint.value);
+}
+
+/**
+ * @param {{kind:"line", a:number,b:number,c:number}} line
+ * @param {{x:number,y:number}} p
+ */
+function lineParamOnCurve(line, p) {
+  const n = Math.hypot(line.a, line.b) || 1;
+  const a = line.a / n;
+  const b = line.b / n;
+  const c = line.c / n;
+  const ref = { x: -a * c, y: -b * c };
+  const dir = { x: -b, y: a };
+  return (p.x - ref.x) * dir.x + (p.y - ref.y) * dir.y;
+}
+
+/** @param {number} a @param {number} b */
+function angleDiff(a, b) {
+  let d = a - b;
+  while (d <= -Math.PI) d += Math.PI * 2;
+  while (d > Math.PI) d -= Math.PI * 2;
+  return d;
+}
+
+/**
+ * @param {GeometryType} geom
+ * @param {any} doc
+ * @param {{kind:"line"|"circle", id:string}} constraint
+ * @returns {import("./geom2d.js").Curve2D | null}
+ */
+function get2DCurveFromConstraint(geom, doc, constraint) {
+  if (constraint.kind === "line") {
+    const line = doc.lines.find((l) => l.id === constraint.id);
+    return line ? derive2DLineCurve(geom, doc, line) : null;
+  }
+  const circle = doc.circles.find((c) => c.id === constraint.id);
+  return circle ? derive2DCircleCurve(geom, doc, circle) : null;
+}
+
+/**
+ * @param {any} doc
+ * @param {{kind:"line"|"circle", id:string}} constraint
+ * @returns {{normal:{x:number,y:number,z:number}, d:number} | null}
+ */
+function getSpherePlaneFromConstraint(doc, constraint) {
+  if (constraint.kind === "line") {
+    const line = doc.lines.find((l) => l.id === constraint.id);
+    return line ? deriveSphereGreatCircle(doc, line) : null;
+  }
+  const circle = doc.circles.find((c) => c.id === constraint.id);
+  return circle ? deriveSphereCircle(doc, circle) : null;
+}
+
+/**
+ * Re-project all constrained 2D points onto their curves (keeps constraints consistent
+ * when other defining points move).
+ *
+ * @param {GeometryType} geom
+ * @param {any} doc
+ */
+function enforce2DConstraints(geom, doc) {
+  for (const pt of doc.points) {
+    if (pt.locked || !pt.constraints || pt.constraints.length === 0) continue;
+    const snapped = apply2DConstraints(geom, doc, pt, { x: pt.x, y: pt.y });
+    pt.x = snapped.x;
+    pt.y = snapped.y;
+  }
+}
+
+/**
+ * Re-project all constrained spherical points onto their curves.
+ *
+ * @param {any} doc
+ */
+function enforceSphereConstraints(doc) {
+  for (const pt of doc.points) {
+    if (pt.locked || !pt.constraints || pt.constraints.length === 0) continue;
+    if (pt.z == null) continue;
+    const snapped = applySphereConstraints(doc, pt, { x: pt.x, y: pt.y, z: pt.z });
+    pt.x = snapped.x;
+    pt.y = snapped.y;
+    pt.z = snapped.z;
+  }
+}
+
+/**
+ * Snap a newly created 2D point to the nearest existing curve (line or circle) if the click is close.
+ *
+ * @param {GeometryType} geom
+ * @param {any} doc
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ * @param {{x:number,y:number}} posScreen
+ * @param {{x:number,y:number}} w
+ * @returns {{x:number,y:number} | null}
+ */
+function snap2DPointToCurves(geom, doc, view, posScreen, w) {
+  const snapPx = 24;
+  /** @type {{point:{x:number,y:number}, constraint:{kind:"line"|"circle", id:string}} | null} */
+  let best = null;
+  let bestDPx = snapPx;
+
+  const consider = (curve, constraint) => {
+    const proj = projectWorldToCurve(curve, w);
+    if (!proj) return;
+    if (!is2DPointInDomain(geom, proj)) return;
+    const projScreen = worldToScreen(view, proj);
+    const dPx = Math.hypot(projScreen.x - posScreen.x, projScreen.y - posScreen.y);
+    if (dPx <= bestDPx) {
+      bestDPx = dPx;
+      best = { point: proj, constraint };
+    }
+  };
+
+  for (const line of doc.lines) {
+    const curve = derive2DLineCurve(geom, doc, line);
+    if (!curve) continue;
+    consider(curve, { kind: "line", id: line.id });
+  }
+  for (const circle of doc.circles) {
+    const curve = derive2DCircleCurve(geom, doc, circle);
+    if (!curve) continue;
+    consider(curve, { kind: "circle", id: circle.id });
+  }
+
+  return best;
+}
+
+/**
+ * @param {import("./geom2d.js").Curve2D} curve
+ * @param {{x:number,y:number}} p
+ * @returns {{x:number,y:number} | null}
+ */
+function projectWorldToCurve(curve, p) {
+  if (curve.kind === "line") {
+    const distSigned = curve.a * p.x + curve.b * p.y + curve.c;
+    return { x: p.x - curve.a * distSigned, y: p.y - curve.b * distSigned };
+  }
+  const vx = p.x - curve.cx;
+  const vy = p.y - curve.cy;
+  const n = Math.hypot(vx, vy);
+  if (n < 1e-12) return null;
+  const k = curve.r / n;
+  return { x: curve.cx + vx * k, y: curve.cy + vy * k };
+}
+
+/**
+ * Snap a newly created spherical point to the nearest existing circle/great-circle if the click is close.
+ *
+ * @param {any} doc
+ * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
+ * @param {{cx:number, cy:number, r:number}} vp
+ * @param {{x:number,y:number}} posScreen
+ * @param {{x:number,y:number,z:number}} p
+ * @returns {{x:number,y:number,z:number} | null}
+ */
+function snapSpherePointToCurves(doc, view, vp, posScreen, p) {
+  const snapPx = 24;
+  /** @type {{point:{x:number,y:number,z:number}, constraint:{kind:"line"|"circle", id:string}} | null} */
+  let best = null;
+  let bestDPx = snapPx;
+
+  const considerPlane = (plane, constraint) => {
+    const proj = closestPointOnSpherePlaneCircle(p, plane);
+    const vProj = rotateToView(view, proj);
+    const sProj = projectSphere(vProj, vp);
+    const dPx = Math.hypot(sProj.x - posScreen.x, sProj.y - posScreen.y);
+    if (dPx <= bestDPx) {
+      bestDPx = dPx;
+      best = { point: proj, constraint };
+    }
+  };
+
+  for (const line of doc.lines) {
+    const plane = deriveSphereGreatCircle(doc, line);
+    if (!plane) continue;
+    considerPlane(plane, { kind: "line", id: line.id });
+  }
+  for (const circle of doc.circles) {
+    const plane = deriveSphereCircle(doc, circle);
+    if (!plane) continue;
+    considerPlane(plane, { kind: "circle", id: circle.id });
+  }
+
+  return best;
+}
+
+/**
+ * Closest point on the spherical circle defined by plane n·x = d and |x|=1.
+ * @param {{x:number,y:number,z:number}} x
+ * @param {{normal:{x:number,y:number,z:number}, d:number}} plane
+ * @returns {{x:number,y:number,z:number}}
+ */
+function closestPointOnSpherePlaneCircle(x, plane) {
+  const n = norm3(plane.normal);
+  const d = plane.d;
+  const t = dot3(n, x);
+  const v = { x: x.x - n.x * t, y: x.y - n.y * t, z: x.z - n.z * t };
+  const vLen = Math.hypot(v.x, v.y, v.z);
+  let u;
+  if (vLen < 1e-12) {
+    const ref = Math.abs(n.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
+    const cx = n.y * ref.z - n.z * ref.y;
+    const cy = n.z * ref.x - n.x * ref.z;
+    const cz = n.x * ref.y - n.y * ref.x;
+    const cLen = Math.hypot(cx, cy, cz) || 1;
+    u = { x: cx / cLen, y: cy / cLen, z: cz / cLen };
+  } else {
+    u = { x: v.x / vLen, y: v.y / vLen, z: v.z / vLen };
+  }
+  const r = Math.sqrt(Math.max(0, 1 - d * d));
+  return { x: n.x * d + u.x * r, y: n.y * d + u.y * r, z: n.z * d + u.z * r };
 }

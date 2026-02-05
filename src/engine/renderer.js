@@ -133,7 +133,16 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
       state.pending?.tool === "intersect" &&
       state.pending.firstObject.kind === "circle" &&
       state.pending.firstObject.id === circle.id;
-    draw2DCircleObject(ctx, view, curve, circle.style, circle.label, isSelected);
+    const c0 = doc.points.find((p) => p.id === circle.center);
+    const r0 = doc.points.find((p) => p.id === circle.radiusPoint);
+    const labelAnchorWorld =
+      c0 && r0
+        ? {
+            x: (c0.x + r0.x) / 2,
+            y: (c0.y + r0.y) / 2,
+          }
+        : null;
+    draw2DCircleObject(ctx, view, geom, curve, circle.style, circle.label, isSelected, w / dpr, h / dpr, labelAnchorWorld);
   }
 
   for (const line of doc.lines) {
@@ -190,23 +199,45 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
  * @param {{color:string,opacity:number}} style
  * @param {string} label
  * @param {boolean} isSelected
+ * @param {number} cssW
+ * @param {number} cssH
+ * @param {{x:number,y:number} | null} labelAnchorWorld
  */
-function draw2DCircleObject(ctx, view, curve, style, label, isSelected) {
+function draw2DCircleObject(ctx, view, geom, curve, style, label, isSelected, cssW, cssH, labelAnchorWorld) {
   ctx.save();
   ctx.globalAlpha = style.opacity;
   ctx.strokeStyle = style.color;
   ctx.lineWidth = isSelected ? 3 : 2;
 
+  if (curve.kind === "line") {
+    const seg = clipLineToView(curve, view, cssW, cssH);
+    if (seg) {
+      const a = worldToScreen(view, seg.a);
+      const b = worldToScreen(view, seg.b);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      const lab = labelAnchorWorld
+        ? worldToScreen(view, labelAnchorWorld)
+        : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      drawCurveLabel(ctx, label, lab.x, lab.y);
+    }
+    ctx.restore();
+    return;
+  }
+
   const c = worldToScreen(view, { x: curve.cx, y: curve.cy });
   ctx.beginPath();
   ctx.arc(c.x, c.y, curve.r * view.scale, 0, Math.PI * 2);
   ctx.stroke();
-  drawCurveLabel(
-    ctx,
-    label,
-    c.x + (curve.r * view.scale) / Math.sqrt(2),
-    c.y - (curve.r * view.scale) / Math.sqrt(2),
-  );
+  const lab = labelAnchorWorld
+    ? worldToScreen(view, labelAnchorWorld)
+    : {
+        x: c.x + (curve.r * view.scale) / Math.sqrt(2),
+        y: c.y - (curve.r * view.scale) / Math.sqrt(2),
+      };
+  drawCurveLabel(ctx, label, lab.x, lab.y);
   ctx.restore();
 }
 

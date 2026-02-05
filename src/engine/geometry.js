@@ -127,7 +127,7 @@ export function derive2DLineCurve(geom, doc, line) {
  * @param {GeometryType} geom
  * @param {{points: Array<{id:string,x:number,y:number,label:string,locked?:boolean,z?:number}>}} doc
  * @param {{center:string,radiusPoint:string}} circle
- * @returns {{kind:"circle", cx:number, cy:number, r:number} | null}
+ * @returns {Curve2D | null}
  */
 export function derive2DCircleCurve(geom, doc, circle) {
   const c0 = doc.points.find((p) => p.id === circle.center);
@@ -135,6 +135,55 @@ export function derive2DCircleCurve(geom, doc, circle) {
   if (!c0 || !r0) return null;
   const c = { x: c0.x, y: c0.y };
   const q = { x: r0.x, y: r0.y };
+
+  if (geom === GeometryType.INVERSIVE_EUCLIDEAN) {
+    const starId = doc.starPointId;
+    const star = starId ? doc.points.find((p) => p.id === starId) : null;
+    const s = star ? { x: star.x, y: star.y } : { x: 0, y: 0 };
+    const pRel = { x: c.x - s.x, y: c.y - s.y };
+    const qRel = { x: q.x - s.x, y: q.y - s.y };
+    const pRelSq = pRel.x * pRel.x + pRel.y * pRel.y;
+    const qRelSq = qRel.x * qRel.x + qRel.y * qRel.y;
+    const epsSq = 1e-16;
+
+    // If center is "∞", fall back to the Euclidean circle centered at ∞ in the chart (i.e., centered at s).
+    if (pRelSq <= epsSq) {
+      const r = Math.hypot(qRel.x, qRel.y);
+      if (!Number.isFinite(r) || r <= 0) return null;
+      return { kind: "circle", cx: s.x, cy: s.y, r };
+    }
+
+    // If the radius point is "∞", the resulting inversive circle passes through ∞, hence is a Euclidean line.
+    if (qRelSq <= epsSq) return lineThrough(s, c);
+
+    // Use unit-radius inversion about the circle centered at ∞ (s). The construction is invariant under choice of radius.
+    const pStarRel = { x: pRel.x / pRelSq, y: pRel.y / pRelSq };
+    const qStarRel = { x: qRel.x / qRelSq, y: qRel.y / qRelSq };
+    const rStar = Math.hypot(qStarRel.x - pStarRel.x, qStarRel.y - pStarRel.y);
+    if (!Number.isFinite(rStar) || rStar <= 0) return null;
+
+    // Invert the Euclidean circle centered at p* through q* back to the original chart.
+    // For inversion about the unit circle (centered at origin), image of circle (u,r) is:
+    //   circle: center = u/(|u|^2 - r^2), radius = r/| |u|^2 - r^2 |
+    //   line (if |u| == r): n·x + c = 0 with n = u/|u| and c = -1/(2|u|).
+    const u = pStarRel;
+    const uSq = u.x * u.x + u.y * u.y;
+    const denom = uSq - rStar * rStar;
+    const tol = 1e-12 * Math.max(1, uSq, rStar * rStar);
+    if (Math.abs(denom) <= tol) {
+      const uLen = Math.sqrt(Math.max(0, uSq));
+      if (uLen <= 1e-14) return null;
+      const nx = u.x / uLen;
+      const ny = u.y / uLen;
+      const cLine = -(nx * s.x + ny * s.y) - 1 / (2 * uLen);
+      return { kind: "line", a: nx, b: ny, c: cLine };
+    }
+    const cxRel = u.x / denom;
+    const cyRel = u.y / denom;
+    const r = rStar / Math.abs(denom);
+    if (!Number.isFinite(r) || r <= 0) return null;
+    return { kind: "circle", cx: s.x + cxRel, cy: s.y + cyRel, r };
+  }
 
   if (geom === GeometryType.HYPERBOLIC_POINCARE) {
     const rho = poincareDistance(c, q);

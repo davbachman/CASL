@@ -24,6 +24,8 @@ export const ToolType = /** @type {const} */ ({
  *  y: number,
  *  z?: number,
  *  locked?: boolean,
+ *  constraints?: Array<{kind: "line" | "circle", id: string}>,
+ *  intersectionHints?: Array<{id: string, mode: "line" | "angle", value: number}>,
  *  style: { color: string, opacity: number }
  * }} Point
  */
@@ -122,7 +124,7 @@ export function createEmptyDoc(geom) {
     doc.starPointId = id;
     doc.points.push({
       id,
-      label: "*",
+      label: "∞",
       x: 0,
       y: 0,
       locked: true,
@@ -168,7 +170,7 @@ export function nextCurveLabel(doc) {
  * @param {string} label
  */
 export function reservePointLabel(doc, label) {
-  if (label === "*") return;
+  if (label === "*" || label === "∞") return;
   const idx = lettersToIndex(label);
   if (idx == null) return;
   doc.nextPointLabel = Math.max(doc.nextPointLabel, idx + 1);
@@ -208,4 +210,3 @@ export function set2DScale(view, nextScale) {
   if (view.kind !== "2d") return;
   view.scale = clamp(nextScale, 10, 3000);
 }
-

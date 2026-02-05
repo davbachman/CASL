@@ -6,7 +6,8 @@
  * @param {HTMLDivElement} host
  * @param {{
  *  getState: () => AppState,
- *  requestRender: () => void
+ *  requestRender: () => void,
+ *  pushHistory: () => void
  * }} deps
  */
 export function installContextMenu(host, deps) {
@@ -90,10 +91,21 @@ export function installContextMenu(host, deps) {
       const d = st.docs[st.activeGeometry];
       const el = findElement(d, target);
       if (!el) return;
-      if (!(target.kind === "point" && el.locked === true)) el.label = label.trim() || el.label;
-      el.style = el.style ?? { color: "#111111", opacity: 1 };
-      el.style.color = color;
-      el.style.opacity = clamp(opacity, 0, 1);
+
+      const nextOpacity = clamp(opacity, 0, 1);
+      const nextLabel = label.trim() || el.label;
+      const canEditLabel = !(target.kind === "point" && el.locked === true);
+      const curStyle = el.style ?? { color: "#111111", opacity: 1 };
+      const nextStyle = { color, opacity: nextOpacity };
+
+      const didChange =
+        (canEditLabel && nextLabel !== el.label) ||
+        nextStyle.color !== curStyle.color ||
+        nextStyle.opacity !== curStyle.opacity;
+
+      if (didChange) deps.pushHistory();
+      if (canEditLabel) el.label = nextLabel;
+      el.style = nextStyle;
       deps.requestRender();
     };
 
