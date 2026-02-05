@@ -40,9 +40,9 @@ export function createRenderer(canvas, state) {
   };
 
   const drawIfNeeded = () => {
+    const { w, h, dpr } = resizeIfNeeded();
     if (!dirty) return;
     dirty = false;
-    const { w, h, dpr } = resizeIfNeeded();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, w, h);
 

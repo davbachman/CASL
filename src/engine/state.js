@@ -55,11 +55,21 @@ export const ToolType = /** @type {const} */ ({
  *  points: Point[],
  *  lines: Line[],
  *  circles: Circle[],
+ *  historySteps?: Array<HistoryStep>,
  *  nextId: number,
  *  nextPointLabel: number,
  *  nextCurveLabel: number,
  *  starPointId?: string
  * }} ConstructionDoc
+ */
+
+/**
+ * @typedef {(
+ *  { type: "point", pointId: string, on?: { kind: "line" | "circle", id: string } } |
+ *  { type: "line", lineId: string } |
+ *  { type: "circle", circleId: string } |
+ *  { type: "intersection", pointId: string, a: { kind: "line" | "circle", id: string }, b: { kind: "line" | "circle", id: string } }
+ * )} HistoryStep
  */
 
 /**
@@ -114,6 +124,7 @@ export function createEmptyDoc(geom) {
     points: [],
     lines: [],
     circles: [],
+    historySteps: [],
     nextId: 1,
     nextPointLabel: 0,
     nextCurveLabel: 0,

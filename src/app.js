@@ -10,9 +10,13 @@ import { createRenderer } from "./engine/renderer.js";
  *  geometrySelect: HTMLSelectElement,
  *  toolButtons: NodeListOf<HTMLButtonElement>,
  *  undoButton: HTMLButtonElement,
+ *  historyToggleButton: HTMLButtonElement,
  *  statusText: HTMLDivElement,
  *  toolHint: HTMLDivElement,
- *  contextMenu: HTMLDivElement
+ *  contextMenu: HTMLDivElement,
+ *  historyPane: HTMLDivElement,
+ *  historyList: HTMLOListElement,
+ *  historyEmpty: HTMLDivElement
  * }} deps
  */
 export function createApp(deps) {
@@ -20,6 +24,15 @@ export function createApp(deps) {
   ensureInversiveInfinityPoint(state);
   const history = createHistory(state);
   const renderer = createRenderer(deps.canvas, state);
+  let lastHistorySignature = "";
+
+  const setHistoryOpen = (open) => {
+    deps.historyPane.classList.toggle("is-collapsed", !open);
+    deps.historyPane.style.display = open ? "flex" : "none";
+    deps.historyPane.hidden = !open;
+    deps.historyToggleButton.setAttribute("aria-expanded", String(open));
+    deps.historyToggleButton.textContent = open ? "Hide History" : "History";
+  };
 
   const updateUndoButton = () => {
     deps.undoButton.disabled = !history.canUndo(state.activeGeometry);
@@ -105,18 +118,45 @@ export function createApp(deps) {
     doUndo();
   });
 
+  deps.historyToggleButton.addEventListener("click", () => {
+    const isOpen = !deps.historyPane.hidden;
+    setHistoryOpen(!isOpen);
+  });
+
   updateToolHint();
   setActiveToolButton(state.activeTool);
   updateUndoButton();
+  setHistoryOpen(false);
   renderer.requestRender(true);
 
   const tick = () => {
     renderer.drawIfNeeded();
     const { text } = renderer.getLastRenderInfo();
     deps.statusText.textContent = text;
+    renderHistoryIfNeeded();
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
+
+  function renderHistoryIfNeeded() {
+    const doc = state.docs[state.activeGeometry];
+    const steps = doc.historySteps ?? [];
+    const lines = steps.map((step) => formatHistoryStep(doc, step)).filter(Boolean);
+    const signature = lines.join("\n");
+    if (signature === lastHistorySignature) return;
+    lastHistorySignature = signature;
+    deps.historyList.innerHTML = "";
+    if (lines.length === 0) {
+      deps.historyEmpty.style.display = "block";
+      return;
+    }
+    deps.historyEmpty.style.display = "none";
+    for (const line of lines) {
+      const li = document.createElement("li");
+      li.textContent = line;
+      deps.historyList.appendChild(li);
+    }
+  }
 }
 
 /** @param {GeometryType} geom */
@@ -135,6 +175,58 @@ function geometryDisplayName(geom) {
     default:
       return geom;
   }
+}
+
+/**
+ * @param {import("./engine/state.js").ConstructionDoc} doc
+ * @param {import("./engine/state.js").HistoryStep} step
+ */
+function formatHistoryStep(doc, step) {
+  if (step.type === "point") {
+    const pLabel = getPointLabel(doc, step.pointId);
+    if (step.on) {
+      const curveLabel = getCurveLabel(doc, step.on);
+      const kindWord = step.on.kind === "line" ? "line" : "circle";
+      return `Let ${pLabel} be a point on the ${kindWord} ${curveLabel}.`;
+    }
+    return `Let ${pLabel} be a point.`;
+  }
+  if (step.type === "line") {
+    const line = doc.lines.find((l) => l.id === step.lineId);
+    if (!line) return null;
+    const pLabel = getPointLabel(doc, line.p1);
+    const qLabel = getPointLabel(doc, line.p2);
+    return `Construct the line ${line.label} through ${pLabel} and ${qLabel}.`;
+  }
+  if (step.type === "circle") {
+    const circle = doc.circles.find((c) => c.id === step.circleId);
+    if (!circle) return null;
+    const centerLabel = getPointLabel(doc, circle.center);
+    const radiusLabel = getPointLabel(doc, circle.radiusPoint);
+    return `Construct the circle ${circle.label} with center ${centerLabel} through the point ${radiusLabel}.`;
+  }
+  if (step.type === "intersection") {
+    const pLabel = getPointLabel(doc, step.pointId);
+    const aLabel = getCurveLabel(doc, step.a);
+    const bLabel = getCurveLabel(doc, step.b);
+    return `Let ${pLabel} be the intersection point of ${aLabel} and ${bLabel}.`;
+  }
+  return null;
+}
+
+/** @param {import("./engine/state.js").ConstructionDoc} doc @param {string} id */
+function getPointLabel(doc, id) {
+  const p = doc.points.find((pt) => pt.id === id);
+  return p?.label ?? "?";
+}
+
+/**
+ * @param {import("./engine/state.js").ConstructionDoc} doc
+ * @param {{kind:"line"|"circle", id:string}} ref
+ */
+function getCurveLabel(doc, ref) {
+  if (ref.kind === "line") return doc.lines.find((l) => l.id === ref.id)?.label ?? "?";
+  return doc.circles.find((c) => c.id === ref.id)?.label ?? "?";
 }
 
 /** @param {import("./engine/state.js").AppState} state */

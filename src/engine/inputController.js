@@ -337,10 +337,9 @@ function getOrCreatePointAtClick(state, geom, doc, view, pos, canvas, pushHistor
     if (!p) return null;
     const snapped = snapSpherePointToCurves(doc, /** @type {any} */ (view), vp, pos, p);
     pushHistory();
-    return {
-      id: createSpherePoint(doc, snapped?.point ?? p, snapped ? [snapped.constraint] : undefined),
-      created: true,
-    };
+    const id = createSpherePoint(doc, snapped?.point ?? p, snapped ? [snapped.constraint] : undefined);
+    recordPointStep(doc, id, snapped?.constraint);
+    return { id, created: true };
   }
 
   const v2d = /** @type {any} */ (view);
@@ -348,10 +347,9 @@ function getOrCreatePointAtClick(state, geom, doc, view, pos, canvas, pushHistor
   if (!is2DPointInDomain(geom, w)) return null;
   const snapped = snap2DPointToCurves(geom, doc, v2d, pos, w);
   pushHistory();
-  return {
-    id: create2DPoint(doc, snapped?.point ?? w, snapped ? [snapped.constraint] : undefined),
-    created: true,
-  };
+  const id = create2DPoint(doc, snapped?.point ?? w, snapped ? [snapped.constraint] : undefined);
+  recordPointStep(doc, id, snapped?.constraint);
+  return { id, created: true };
 }
 
 /**
@@ -418,6 +416,7 @@ function onLineClick(state, doc, pointId, historyAlreadyPushed, pushHistory) {
     p2: second,
     style: { color: "#0b57d0", opacity: 1 },
   });
+  recordLineStep(doc, id);
 }
 
 /** @param {AppState} state @param {any} doc @param {string} pointId */
@@ -442,6 +441,7 @@ function onCircleClick(state, doc, pointId, historyAlreadyPushed, pushHistory) {
     radiusPoint,
     style: { color: "#b31412", opacity: 1 },
   });
+  recordCircleStep(doc, id);
 }
 
 /**
@@ -483,7 +483,10 @@ function onIntersectClick(state, geom, doc, obj, view, canvas, pushHistory) {
       { kind: a.kind, id: a.id },
       { kind: b.kind, id: b.id },
     ];
-    for (const p of newPts) createSpherePoint(doc, p, constraints);
+    for (const p of newPts) {
+      const id = createSpherePoint(doc, p, constraints);
+      recordIntersectionStep(doc, id, a, b);
+    }
     return;
   }
 
@@ -504,7 +507,8 @@ function onIntersectClick(state, geom, doc, obj, view, canvas, pushHistory) {
   ];
   for (const p of newPts) {
     const hints = buildIntersectionHints(geom, doc, constraints, p);
-    create2DPoint(doc, p, constraints, hints);
+    const id = create2DPoint(doc, p, constraints, hints);
+    recordIntersectionStep(doc, id, a, b);
   }
 }
 
@@ -806,6 +810,58 @@ function angleDiff(a, b) {
   while (d <= -Math.PI) d += Math.PI * 2;
   while (d > Math.PI) d -= Math.PI * 2;
   return d;
+}
+
+/**
+ * @param {any} doc
+ * @returns {import("./state.js").HistoryStep[]}
+ */
+function ensureHistorySteps(doc) {
+  if (!doc.historySteps) doc.historySteps = [];
+  return doc.historySteps;
+}
+
+/**
+ * @param {any} doc
+ * @param {string} pointId
+ * @param {{kind:"line"|"circle", id:string} | undefined} on
+ */
+function recordPointStep(doc, pointId, on) {
+  const steps = ensureHistorySteps(doc);
+  if (on) {
+    steps.push({ type: "point", pointId, on: { kind: on.kind, id: on.id } });
+  } else {
+    steps.push({ type: "point", pointId });
+  }
+}
+
+/**
+ * @param {any} doc
+ * @param {string} lineId
+ */
+function recordLineStep(doc, lineId) {
+  const steps = ensureHistorySteps(doc);
+  steps.push({ type: "line", lineId });
+}
+
+/**
+ * @param {any} doc
+ * @param {string} circleId
+ */
+function recordCircleStep(doc, circleId) {
+  const steps = ensureHistorySteps(doc);
+  steps.push({ type: "circle", circleId });
+}
+
+/**
+ * @param {any} doc
+ * @param {string} pointId
+ * @param {{kind:"line"|"circle", id:string}} a
+ * @param {{kind:"line"|"circle", id:string}} b
+ */
+function recordIntersectionStep(doc, pointId, a, b) {
+  const steps = ensureHistorySteps(doc);
+  steps.push({ type: "intersection", pointId, a: { kind: a.kind, id: a.id }, b: { kind: b.kind, id: b.id } });
 }
 
 /**
