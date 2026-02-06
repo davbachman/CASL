@@ -11,6 +11,7 @@ export const GeometryType = /** @type {const} */ ({
 });
 
 export const ToolType = /** @type {const} */ ({
+  POINT: "point",
   LINE: "line",
   CIRCLE: "circle",
   INTERSECT: "intersect",
@@ -26,6 +27,8 @@ export const ToolType = /** @type {const} */ ({
  *  locked?: boolean,
  *  constraints?: Array<{kind: "line" | "circle", id: string}>,
  *  intersectionHints?: Array<{id: string, mode: "line" | "angle", value: number}>,
+ *  hidden?: boolean,
+ *  debug?: boolean,
  *  style: { color: string, opacity: number }
  * }} Point
  */
@@ -36,6 +39,8 @@ export const ToolType = /** @type {const} */ ({
  *  label: string,
  *  p1: string,
  *  p2: string,
+ *  hidden?: boolean,
+ *  debug?: boolean,
  *  style: { color: string, opacity: number }
  * }} Line
  */
@@ -46,6 +51,8 @@ export const ToolType = /** @type {const} */ ({
  *  label: string,
  *  center: string,
  *  radiusPoint: string,
+ *  hidden?: boolean,
+ *  debug?: boolean,
  *  style: { color: string, opacity: number }
  * }} Circle
  */
@@ -68,8 +75,43 @@ export const ToolType = /** @type {const} */ ({
  *  { type: "point", pointId: string, on?: { kind: "line" | "circle", id: string } } |
  *  { type: "line", lineId: string } |
  *  { type: "circle", circleId: string } |
- *  { type: "intersection", pointId: string, a: { kind: "line" | "circle", id: string }, b: { kind: "line" | "circle", id: string } }
+ *  { type: "intersection", pointId: string, a: { kind: "line" | "circle", id: string }, b: { kind: "line" | "circle", id: string } } |
+ *  { type: "tool", toolName: string, output: { kind: "point" | "line" | "circle", id: string }, inputs: Array<{ kind: "point" | "line" | "circle", id: string }> }
  * )} HistoryStep
+ */
+
+/**
+ * @typedef {{
+ *  id: string,
+ *  name: string,
+ *  inputs: Array<{ kind: "point" | "line" | "circle" }>,
+ *  steps: ToolStep[],
+ *  output: { kind: "point" | "line" | "circle", nodeId: string }
+ * }} CustomTool
+ */
+
+/**
+ * @typedef {(
+ *  { id: string, kind: "point", op: "input", inputIndex: number } |
+ *  { id: string, kind: "line", op: "input", inputIndex: number } |
+ *  { id: string, kind: "circle", op: "input", inputIndex: number } |
+ *  { id: string, kind: "line", op: "line", p1: string, p2: string } |
+ *  { id: string, kind: "circle", op: "circle", center: string, radius: string } |
+ *  { id: string, kind: "circle", op: "circle_fixed", center: string, radius: number, angle: number } |
+ *  { id: string, kind: "point", op: "point_fixed", x: number, y: number, z?: number } |
+ *  { id: string, kind: "point", op: "intersection", a: string, b: string, curveHints?: Array<{ nodeId: string, mode: "line" | "angle", value: number }>, sphereHint?: { x: number, y: number, z: number }, lineRef?: { lineNodeId: string, refPointNodeId: string, value: number }, lineSide?: { lineNodeId: string, sign: number }, circleSide?: { sign: number }, orientRef?: { originNodeId: string, directionNodeId: string, sign: number }, pairRef?: { originNodeId: string, otherPointNodeId: string, angle: number }, avoidPointRef?: { pointNodeId: string } } |
+ *  { id: string, kind: "point", op: "point_on", curve: string, curveHint?: { mode: "line" | "angle", value: number }, lineOffsetRef?: { originNodeId: string, offset: number }, sphereHint?: { x: number, y: number, z: number } }
+ * )} ToolStep
+ */
+
+/**
+ * @typedef {{
+ *  name: string,
+ *  stage: "inputs" | "output" | "finalize",
+ *  inputs: Array<{ kind: "point" | "line" | "circle", id: string }>,
+ *  output?: { kind: "point" | "line" | "circle", id: string },
+ *  error?: string
+ * }} ToolBuilderState
  */
 
 /**
@@ -89,9 +131,15 @@ export const ToolType = /** @type {const} */ ({
 /**
  * @typedef {{
  *  activeGeometry: GeometryType,
- *  activeTool: ToolType,
+ *  activeTool: string,
  *  docs: Record<string, ConstructionDoc>,
  *  views: Record<string, ViewState>,
+ *  customTools: Record<string, CustomTool[]>,
+ *  toolBuilder: ToolBuilderState | null,
+ *  toolUse: null | { toolId: string, inputs: Array<{ kind: "point" | "line" | "circle", id: string }> },
+ *  toolUseError?: string | null,
+ *  showSteps: boolean,
+ *  nextToolId: number,
  *  pending: null | { tool: ToolType.LINE | ToolType.CIRCLE, firstPointId: string } | { tool: ToolType.INTERSECT, firstObject: { kind: "line"|"circle", id: string } },
  *  selection: null | { kind: "line"|"circle", id: string }
  * }} AppState
@@ -105,6 +153,12 @@ export function createInitialState() {
     activeTool: ToolType.LINE,
     docs: Object.create(null),
     views: Object.create(null),
+    customTools: Object.create(null),
+    toolBuilder: null,
+    toolUse: null,
+    toolUseError: null,
+    showSteps: false,
+    nextToolId: 1,
     pending: null,
     selection: null,
   };
@@ -112,6 +166,7 @@ export function createInitialState() {
   for (const geom of Object.values(GeometryType)) {
     state.docs[geom] = createEmptyDoc(geom);
     state.views[geom] = createDefaultView(geom);
+    state.customTools[geom] = [];
   }
 
   return state;

@@ -24,6 +24,12 @@
           <button id="undoBtn" class="menu-btn" type="button" disabled title="Undo (Ctrl/Cmd+Z)">Undo</button>
         </div>
         <div class="menu-group">
+          <button id="clearBtn" class="menu-btn" type="button" title="Clear construction">Clear</button>
+        </div>
+        <div class="menu-group">
+          <button id="showStepsBtn" class="menu-btn" type="button">Show Steps</button>
+        </div>
+        <div class="menu-group">
           <button id="historyToggleBtn" class="menu-btn" type="button">History</button>
         </div>
         <div class="menu-spacer"></div>
@@ -33,11 +39,15 @@
       <div class="main">
         <aside class="sidebar">
           <div class="sidebar-title">Tools</div>
-          <div class="tool-list" role="group" aria-label="Tools">
+          <div id="toolListRoot" class="tool-list" role="group" aria-label="Tools">
+            <button class="tool-btn" data-tool="point" type="button">Point</button>
             <button class="tool-btn is-active" data-tool="line" type="button">Line</button>
             <button class="tool-btn" data-tool="circle" type="button">Circle</button>
             <button class="tool-btn" data-tool="intersect" type="button">Intersect</button>
           </div>
+          <button id="buildToolBtn" class="build-tool-btn" type="button">Build Tool</button>
+          <div id="customToolsTitle" class="sidebar-title">Custom Tools</div>
+          <div id="customToolList" class="tool-list" role="group" aria-label="Custom tools"></div>
           <div id="toolHint" class="tool-hint"></div>
           <div class="sidebar-footer">
             <div class="hint-title">Controls</div>
@@ -63,6 +73,6 @@
       </div>
     </div>
 
-    <script type="module" src="./src/main.js?v=20260205"></script>
+    <script type="module" src="./src/main.js?v=20260205-30"></script>
   </body>
 </html>

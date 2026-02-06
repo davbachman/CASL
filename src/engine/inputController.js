@@ -147,17 +147,27 @@ export function attachCanvasController(canvas, deps) {
 
     if (!moved) {
       // Treat as a click
-      if (state.activeTool === ToolType.INTERSECT) {
-        const obj = hitTestCurve(state, geom, pos, canvas);
-        if (obj) onIntersectClick(state, geom, doc, obj, view, canvas, deps.pushHistory);
+      if (state.toolBuilder) {
+        handleToolBuilderClick(state, geom, pos, canvas);
+        deps.requestRender();
       } else {
-        const hit = getOrCreatePointAtClick(state, geom, doc, view, pos, canvas, deps.pushHistory);
-        if (hit) {
-          if (state.activeTool === ToolType.LINE) onLineClick(state, doc, hit.id, hit.created, deps.pushHistory);
-          if (state.activeTool === ToolType.CIRCLE) onCircleClick(state, doc, hit.id, hit.created, deps.pushHistory);
+        const customTool = getActiveCustomTool(state);
+        if (customTool) {
+          handleCustomToolClick(state, geom, doc, view, pos, canvas, customTool, deps.pushHistory);
+          deps.requestRender();
+        } else if (state.activeTool === ToolType.INTERSECT) {
+          const obj = hitTestCurve(state, geom, pos, canvas);
+          if (obj) onIntersectClick(state, geom, doc, obj, view, canvas, deps.pushHistory);
+          deps.requestRender();
+        } else {
+          const hit = getOrCreatePointAtClick(state, geom, doc, view, pos, canvas, deps.pushHistory);
+          if (hit) {
+            if (state.activeTool === ToolType.LINE) onLineClick(state, doc, hit.id, hit.created, deps.pushHistory);
+            if (state.activeTool === ToolType.CIRCLE) onCircleClick(state, doc, hit.id, hit.created, deps.pushHistory);
+          }
+          deps.requestRender();
         }
       }
-      deps.requestRender();
     }
 
     action = null;
@@ -217,6 +227,7 @@ function hitTestPoint(state, geom, pos, canvas) {
     let best = null;
     let bestD = Infinity;
     for (const pt of doc.points) {
+      if (pt.hidden) continue;
       if (pt.z == null) continue;
       const v = rotateToView(/** @type {any} */ (view), { x: pt.x, y: pt.y, z: pt.z });
       const s = projectSphere(v, vp);
@@ -233,6 +244,7 @@ function hitTestPoint(state, geom, pos, canvas) {
   let best = null;
   let bestD = Infinity;
   for (const pt of doc.points) {
+    if (pt.hidden) continue;
     const s = worldToScreen(v2d, { x: pt.x, y: pt.y });
     const d = Math.hypot(s.x - pos.x, s.y - pos.y);
     if (d < bestD) {
@@ -263,6 +275,7 @@ function hitTestCurve(state, geom, pos, canvas) {
     let best = null;
     let bestD = Infinity;
     for (const line of doc.lines) {
+      if (line.hidden) continue;
       const plane = deriveSphereGreatCircle(doc, line);
       if (!plane) continue;
       const d = Math.abs(dot3(plane.normal, x) - plane.d);
@@ -272,6 +285,7 @@ function hitTestCurve(state, geom, pos, canvas) {
       }
     }
     for (const circle of doc.circles) {
+      if (circle.hidden) continue;
       const plane = deriveSphereCircle(doc, circle);
       if (!plane) continue;
       const d = Math.abs(dot3(plane.normal, x) - plane.d);
@@ -292,6 +306,7 @@ function hitTestCurve(state, geom, pos, canvas) {
   let bestDPx = Infinity;
 
   for (const line of doc.lines) {
+    if (line.hidden) continue;
     const curve = derive2DLineCurve(geom, doc, line);
     if (!curve) continue;
     const dWorld = Math.abs(signedDistanceToCurve(curve, w));
@@ -303,6 +318,7 @@ function hitTestCurve(state, geom, pos, canvas) {
   }
 
   for (const circle of doc.circles) {
+    if (circle.hidden) continue;
     const curve = derive2DCircleCurve(geom, doc, circle);
     if (!curve) continue;
     const dWorld = Math.abs(signedDistanceToCurve(curve, w));
@@ -375,6 +391,27 @@ function create2DPoint(doc, w, constraints, intersectionHints) {
 
 /**
  * @param {any} doc
+ * @param {{x:number,y:number}} w
+ * @param {Array<{kind:"line"|"circle", id:string}> | undefined} constraints
+ * @param {Array<{id:string, mode:"line"|"angle", value:number}> | undefined} intersectionHints
+ */
+function createHidden2DPoint(doc, w, constraints, intersectionHints) {
+  const id = makeId("p", doc.nextId++);
+  doc.points.push({
+    id,
+    label: "",
+    x: w.x,
+    y: w.y,
+    constraints: constraints && constraints.length > 0 ? constraints : undefined,
+    intersectionHints: intersectionHints && intersectionHints.length > 0 ? intersectionHints : undefined,
+    hidden: true,
+    style: { color: "#111111", opacity: 1 },
+  });
+  return id;
+}
+
+/**
+ * @param {any} doc
  * @param {{x:number,y:number,z:number}} p
  * @param {Array<{kind:"line"|"circle", id:string}> | undefined} constraints
  */
@@ -390,6 +427,83 @@ function createSpherePoint(doc, p, constraints) {
     z: u.z,
     constraints: constraints && constraints.length > 0 ? constraints : undefined,
     style: { color: "#111111", opacity: 1 },
+  });
+  return id;
+}
+
+/**
+ * @param {any} doc
+ * @param {{x:number,y:number,z:number}} p
+ * @param {Array<{kind:"line"|"circle", id:string}> | undefined} constraints
+ */
+function createHiddenSpherePoint(doc, p, constraints) {
+  const id = makeId("p", doc.nextId++);
+  const u = norm3(p);
+  doc.points.push({
+    id,
+    label: "",
+    x: u.x,
+    y: u.y,
+    z: u.z,
+    constraints: constraints && constraints.length > 0 ? constraints : undefined,
+    hidden: true,
+    style: { color: "#111111", opacity: 1 },
+  });
+  return id;
+}
+
+/** @param {any} doc @param {string} p1 @param {string} p2 */
+function createHiddenLine(doc, p1, p2) {
+  const id = makeId("l", doc.nextId++);
+  doc.lines.push({
+    id,
+    label: "",
+    p1,
+    p2,
+    hidden: true,
+    style: { color: "#0b57d0", opacity: 1 },
+  });
+  return id;
+}
+
+/** @param {any} doc @param {string} p1 @param {string} p2 */
+function createVisibleLine(doc, p1, p2) {
+  const id = makeId("l", doc.nextId++);
+  const label = nextCurveLabel(doc);
+  doc.lines.push({
+    id,
+    label,
+    p1,
+    p2,
+    style: { color: "#0b57d0", opacity: 1 },
+  });
+  return id;
+}
+
+/** @param {any} doc @param {string} center @param {string} radiusPoint */
+function createHiddenCircle(doc, center, radiusPoint) {
+  const id = makeId("c", doc.nextId++);
+  doc.circles.push({
+    id,
+    label: "",
+    center,
+    radiusPoint,
+    hidden: true,
+    style: { color: "#b31412", opacity: 1 },
+  });
+  return id;
+}
+
+/** @param {any} doc @param {string} center @param {string} radiusPoint */
+function createVisibleCircle(doc, center, radiusPoint) {
+  const id = makeId("c", doc.nextId++);
+  const label = nextCurveLabel(doc);
+  doc.circles.push({
+    id,
+    label,
+    center,
+    radiusPoint,
+    style: { color: "#b31412", opacity: 1 },
   });
   return id;
 }
@@ -513,6 +627,70 @@ function onIntersectClick(state, geom, doc, obj, view, canvas, pushHistory) {
 }
 
 /**
+ * Handle clicks during tool-building mode.
+ *
+ * @param {AppState} state
+ * @param {GeometryType} geom
+ * @param {{x:number,y:number}} pos
+ * @param {HTMLCanvasElement} canvas
+ */
+function handleToolBuilderClick(state, geom, pos, canvas) {
+  const builder = state.toolBuilder;
+  if (!builder) return;
+  const hit = hitTestAny(state, geom, pos, canvas);
+  if (!hit) return;
+  builder.error = undefined;
+  if (builder.stage === "inputs") {
+    const idx = builder.inputs.findIndex((ref) => ref.kind === hit.kind && ref.id === hit.id);
+    if (idx >= 0) builder.inputs.splice(idx, 1);
+    else builder.inputs.push(hit);
+    return;
+  }
+  if (builder.stage === "output") {
+    builder.output = hit;
+    builder.stage = "finalize";
+  }
+}
+
+/**
+ * Handle clicks while using a custom tool.
+ *
+ * @param {AppState} state
+ * @param {GeometryType} geom
+ * @param {any} doc
+ * @param {any} view
+ * @param {{x:number,y:number}} pos
+ * @param {HTMLCanvasElement} canvas
+ * @param {import("./state.js").CustomTool} tool
+ * @param {() => void} pushHistory
+ */
+function handleCustomToolClick(state, geom, doc, view, pos, canvas, tool, pushHistory) {
+  if (!state.toolUse || state.toolUse.toolId !== tool.id) {
+    state.toolUse = { toolId: tool.id, inputs: [] };
+  }
+  state.toolUseError = null;
+  const pending = state.toolUse;
+  const next = tool.inputs[pending.inputs.length];
+  if (!next) return;
+  let hit = null;
+  if (next.kind === "point") {
+    const pt = hitTestPoint(state, geom, pos, canvas);
+    if (pt) hit = { kind: "point", id: pt.id };
+  } else {
+    hit = hitTestCurve(state, geom, pos, canvas);
+  }
+  if (!hit || hit.kind !== next.kind) return;
+  if (pending.inputs.some((ref) => ref.kind === hit.kind && ref.id === hit.id)) return;
+  pending.inputs.push(hit);
+  if (pending.inputs.length < tool.inputs.length) return;
+  pushHistory();
+  const result = applyCustomTool(state, geom, doc, tool, pending.inputs, view);
+  if (result.output) recordToolStep(doc, tool.name, result.output, pending.inputs);
+  if (!result.output && result.error) state.toolUseError = result.error;
+  state.toolUse = null;
+}
+
+/**
  * @param {any} doc
  * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
  * @param {{x:number,y:number}[]} hits
@@ -524,6 +702,7 @@ function filterNew2DPoints(doc, view, hits, thresholdPx) {
   for (const p of hits) {
     const s = worldToScreen(view, p);
     const isNearExisting = doc.points.some((q) => {
+      if (q.hidden) return false;
       const qs = worldToScreen(view, { x: q.x, y: q.y });
       return Math.hypot(qs.x - s.x, qs.y - s.y) <= thresholdPx;
     });
@@ -553,6 +732,7 @@ function filterNewSpherePoints(doc, view, vp, hits, thresholdPx) {
     const v = rotateToView(view, p);
     const s = projectSphere(v, vp);
     const isNearExisting = doc.points.some((q) => {
+      if (q.hidden) return false;
       if (q.z == null) return false;
       const qv = rotateToView(view, { x: q.x, y: q.y, z: q.z });
       const qs = projectSphere(qv, vp);
@@ -796,9 +976,14 @@ function curveParamDiff(curve, hint, p) {
  */
 function lineParamOnCurve(line, p) {
   const n = Math.hypot(line.a, line.b) || 1;
-  const a = line.a / n;
-  const b = line.b / n;
-  const c = line.c / n;
+  let a = line.a / n;
+  let b = line.b / n;
+  let c = line.c / n;
+  if (a < 0 || (Math.abs(a) < 1e-12 && b < 0)) {
+    a = -a;
+    b = -b;
+    c = -c;
+  }
   const ref = { x: -a * c, y: -b * c };
   const dir = { x: -b, y: a };
   return (p.x - ref.x) * dir.x + (p.y - ref.y) * dir.y;
@@ -862,6 +1047,698 @@ function recordCircleStep(doc, circleId) {
 function recordIntersectionStep(doc, pointId, a, b) {
   const steps = ensureHistorySteps(doc);
   steps.push({ type: "intersection", pointId, a: { kind: a.kind, id: a.id }, b: { kind: b.kind, id: b.id } });
+}
+
+/**
+ * @param {any} doc
+ * @param {string} toolName
+ * @param {{kind:"point"|"line"|"circle", id:string}} output
+ * @param {Array<{kind:"point"|"line"|"circle", id:string}>} inputs
+ */
+function recordToolStep(doc, toolName, output, inputs) {
+  const steps = ensureHistorySteps(doc);
+  steps.push({ type: "tool", toolName, output, inputs });
+}
+
+/** @param {AppState} state */
+function getActiveCustomTool(state) {
+  if (!state.activeTool || !state.activeTool.startsWith("custom:")) return null;
+  const id = state.activeTool.replace("custom:", "");
+  return state.customTools[state.activeGeometry]?.find((tool) => tool.id === id) ?? null;
+}
+
+/**
+ * Apply a custom tool to selected inputs.
+ *
+ * @param {AppState} state
+ * @param {GeometryType} geom
+ * @param {any} doc
+ * @param {import("./state.js").CustomTool} tool
+ * @param {Array<{kind:"point"|"line"|"circle", id:string}>} inputs
+ * @param {any} view
+ * @returns {{output: {kind:"point"|"line"|"circle", id:string} | null, error: string | null}}
+ */
+function applyCustomTool(state, geom, doc, tool, inputs, view) {
+  /** @type {Map<string, {kind:"point"|"line"|"circle", id:string}>} */
+  const nodeMap = new Map();
+  /** @type {{points:string[], lines:string[], circles:string[]}} */
+  const created = { points: [], lines: [], circles: [] };
+  /** @type {Map<string, Array<{x:number,y:number}>>} */
+  const intersectionReuse = new Map();
+  const debugColor = "#2e7d32";
+  let debugIndex = 1;
+  let errorMessage = null;
+  const showSteps = !!state.showSteps;
+
+  const cleanup = () => {
+    doc.points = doc.points.filter((p) => !created.points.includes(p.id));
+    doc.lines = doc.lines.filter((l) => !created.lines.includes(l.id));
+    doc.circles = doc.circles.filter((c) => !created.circles.includes(c.id));
+  };
+
+  const addPoint = (id, hidden) => {
+    if (hidden) created.points.push(id);
+  };
+  const addLine = (id, hidden) => {
+    if (hidden) created.lines.push(id);
+  };
+  const addCircle = (id, hidden) => {
+    if (hidden) created.circles.push(id);
+  };
+  const nextDebugLabel = () => String(debugIndex++);
+  const createDebug2DPoint = (w, constraints, intersectionHints) => {
+    const id = makeId("p", doc.nextId++);
+    doc.points.push({
+      id,
+      label: nextDebugLabel(),
+      x: w.x,
+      y: w.y,
+      constraints: constraints && constraints.length > 0 ? constraints : undefined,
+      intersectionHints: intersectionHints && intersectionHints.length > 0 ? intersectionHints : undefined,
+      hidden: !showSteps,
+      debug: true,
+      style: { color: debugColor, opacity: 1 },
+    });
+    return id;
+  };
+  const createDebugSpherePoint = (p, constraints) => {
+    const id = makeId("p", doc.nextId++);
+    const u = norm3(p);
+    doc.points.push({
+      id,
+      label: nextDebugLabel(),
+      x: u.x,
+      y: u.y,
+      z: u.z,
+      constraints: constraints && constraints.length > 0 ? constraints : undefined,
+      hidden: !showSteps,
+      debug: true,
+      style: { color: debugColor, opacity: 1 },
+    });
+    return id;
+  };
+  const createDebugLine = (p1, p2) => {
+    const id = makeId("l", doc.nextId++);
+    doc.lines.push({
+      id,
+      label: nextDebugLabel(),
+      p1,
+      p2,
+      hidden: !showSteps,
+      debug: true,
+      style: { color: debugColor, opacity: 1 },
+    });
+    return id;
+  };
+  const createDebugCircle = (center, radiusPoint) => {
+    const id = makeId("c", doc.nextId++);
+    doc.circles.push({
+      id,
+      label: nextDebugLabel(),
+      center,
+      radiusPoint,
+      hidden: !showSteps,
+      debug: true,
+      style: { color: debugColor, opacity: 1 },
+    });
+    return id;
+  };
+
+  try {
+    for (const step of tool.steps) {
+      if (step.op === "input") {
+        const ref = inputs[step.inputIndex];
+        if (!ref || ref.kind !== step.kind) throw new Error("Input mismatch.");
+        nodeMap.set(step.id, ref);
+        continue;
+      }
+
+      if (step.kind === "line" && step.op === "line") {
+        const p1 = nodeMap.get(step.p1);
+        const p2 = nodeMap.get(step.p2);
+        if (!p1 || !p2 || p1.kind !== "point" || p2.kind !== "point") throw new Error("Line inputs missing.");
+        const isOutput = tool.output.kind === "line" && tool.output.nodeId === step.id;
+        const id = isOutput ? createVisibleLine(doc, p1.id, p2.id) : createDebugLine(p1.id, p2.id);
+        addLine(id, !isOutput);
+        nodeMap.set(step.id, { kind: "line", id });
+        continue;
+      }
+
+      if (step.kind === "circle" && step.op === "circle_fixed") {
+        if (geom === GeometryType.SPHERICAL) throw new Error("Fixed-radius circles not supported on sphere.");
+        const c = nodeMap.get(step.center);
+        if (!c || c.kind !== "point") throw new Error("Circle center missing.");
+        const centerPoint = doc.points.find((p) => p.id === c.id);
+        if (!centerPoint) throw new Error("Circle center missing.");
+        const angle = Number.isFinite(step.angle) ? step.angle : 0;
+        const radius = step.radius;
+        if (!Number.isFinite(radius) || radius <= 1e-9) throw new Error("Invalid circle radius.");
+        const radiusPos = {
+          x: centerPoint.x + radius * Math.cos(angle),
+          y: centerPoint.y + radius * Math.sin(angle),
+        };
+        const radiusPointId = createHidden2DPoint(doc, radiusPos, undefined, undefined);
+        addPoint(radiusPointId, true);
+        const isOutput = tool.output.kind === "circle" && tool.output.nodeId === step.id;
+        const id = isOutput ? createVisibleCircle(doc, c.id, radiusPointId) : createDebugCircle(c.id, radiusPointId);
+        addCircle(id, !isOutput);
+        nodeMap.set(step.id, { kind: "circle", id });
+        continue;
+      }
+
+      if (step.kind === "circle" && step.op === "circle") {
+        const c = nodeMap.get(step.center);
+        const r = nodeMap.get(step.radius);
+        if (!c || !r || c.kind !== "point" || r.kind !== "point") throw new Error("Circle inputs missing.");
+        const isOutput = tool.output.kind === "circle" && tool.output.nodeId === step.id;
+        const id = isOutput ? createVisibleCircle(doc, c.id, r.id) : createDebugCircle(c.id, r.id);
+        addCircle(id, !isOutput);
+        nodeMap.set(step.id, { kind: "circle", id });
+        continue;
+      }
+
+      if (step.kind === "point" && step.op === "point_fixed") {
+        const isOutput = tool.output.kind === "point" && tool.output.nodeId === step.id;
+        if (geom === GeometryType.SPHERICAL) {
+          if (typeof step.z !== "number") throw new Error("Invalid spherical point.");
+          const id = isOutput
+            ? createSpherePoint(doc, { x: step.x, y: step.y, z: step.z }, undefined)
+            : createDebugSpherePoint({ x: step.x, y: step.y, z: step.z }, undefined);
+          addPoint(id, !isOutput);
+          nodeMap.set(step.id, { kind: "point", id });
+        } else {
+          const id = isOutput
+            ? create2DPoint(doc, { x: step.x, y: step.y }, undefined, undefined)
+            : createDebug2DPoint({ x: step.x, y: step.y }, undefined, undefined);
+          addPoint(id, !isOutput);
+          nodeMap.set(step.id, { kind: "point", id });
+        }
+        continue;
+      }
+
+      if (step.kind === "point" && step.op === "intersection") {
+        const a = nodeMap.get(step.a);
+        const b = nodeMap.get(step.b);
+        if (!a || !b) throw new Error("Intersection inputs missing.");
+        const constraints = [
+          { kind: a.kind, id: a.id },
+          { kind: b.kind, id: b.id },
+        ];
+
+        if (geom === GeometryType.SPHERICAL) {
+          const planeA = getSpherePlaneFromConstraint(doc, constraints[0]);
+          const planeB = getSpherePlaneFromConstraint(doc, constraints[1]);
+          if (!planeA || !planeB) throw new Error("Invalid spherical constraints.");
+          const hit = pickSphereIntersection(planeA, planeB, step.sphereHint);
+          if (!hit) throw new Error("No intersection.");
+          const isOutput = tool.output.kind === "point" && tool.output.nodeId === step.id;
+          const id = isOutput ? createSpherePoint(doc, hit, constraints) : createDebugSpherePoint(hit, constraints);
+          addPoint(id, !isOutput);
+          nodeMap.set(step.id, { kind: "point", id });
+          continue;
+        }
+
+        const curveA = get2DCurveFromConstraint(geom, doc, constraints[0]);
+        const curveB = get2DCurveFromConstraint(geom, doc, constraints[1]);
+        if (!curveA || !curveB) throw new Error("Invalid constraints.");
+        const hintA = step.curveHints?.find((h) => h.nodeId === step.a) ?? null;
+        const hintB = step.curveHints?.find((h) => h.nodeId === step.b) ?? null;
+        const lineRef = buildLineRefForStep(step, nodeMap, doc, geom);
+        const lineSide = buildLineSideForStep(step, nodeMap, doc, geom);
+        const circleSide = buildCircleSideForStep(step, nodeMap, doc, geom);
+        const orientRef = buildOrientRefForStep(step, nodeMap, doc);
+        const pairRef = buildPairRefForStep(step, nodeMap, doc);
+        let preHits = null;
+        if (geom === GeometryType.EUCLIDEAN) {
+          const lineCurve = curveA.kind === "line" ? curveA : curveB.kind === "line" ? curveB : null;
+          const circleConstraint = constraints.find((c) => c.kind === "circle");
+          if (lineCurve && circleConstraint) {
+            const circleObj = doc.circles.find((c) => c.id === circleConstraint.id);
+            if (circleObj) {
+              const centerPoint = doc.points.find((p) => p.id === circleObj.center);
+              const radiusPoint = doc.points.find((p) => p.id === circleObj.radiusPoint);
+              if (centerPoint && radiusPoint) {
+                const distToLine = Math.abs(signedDistanceToCurve(lineCurve, radiusPoint));
+                if (distToLine <= 1e-6) {
+                  const distSigned = lineCurve.a * centerPoint.x + lineCurve.b * centerPoint.y + lineCurve.c;
+                  const x0 = centerPoint.x - lineCurve.a * distSigned;
+                  const y0 = centerPoint.y - lineCurve.b * distSigned;
+                  const other = { x: 2 * x0 - radiusPoint.x, y: 2 * y0 - radiusPoint.y };
+                  const dx = other.x - radiusPoint.x;
+                  const dy = other.y - radiusPoint.y;
+                  if (dx * dx + dy * dy > 1e-12) {
+                    preHits = [
+                      { x: radiusPoint.x, y: radiusPoint.y },
+                      { x: other.x, y: other.y },
+                    ];
+                  }
+                }
+              }
+            }
+          }
+        }
+        const key = step.a < step.b ? `${step.a}|${step.b}` : `${step.b}|${step.a}`;
+        const avoidReuse = intersectionReuse.get(key) ?? null;
+        const avoidPoint = buildAvoidPointForStep(step, nodeMap, doc);
+        const avoid =
+          avoidPoint && avoidReuse ? [avoidPoint, ...avoidReuse] : avoidPoint ? [avoidPoint] : avoidReuse ?? null;
+        const hit = pick2DIntersection(
+          geom,
+          curveA,
+          curveB,
+          hintA,
+          hintB,
+          lineRef,
+          lineSide,
+          circleSide,
+          orientRef,
+          pairRef,
+          avoid,
+          preHits,
+        );
+        if (!hit) throw new Error("No intersection.");
+        if (avoidReuse) avoidReuse.push(hit);
+        else intersectionReuse.set(key, [hit]);
+        const intersectionHints = buildIntersectionHintsForStep(step, constraints);
+        const isOutput = tool.output.kind === "point" && tool.output.nodeId === step.id;
+        const id = isOutput
+          ? create2DPoint(doc, hit, constraints, intersectionHints)
+          : createDebug2DPoint(hit, constraints, intersectionHints);
+        addPoint(id, !isOutput);
+        nodeMap.set(step.id, { kind: "point", id });
+        continue;
+      }
+
+      if (step.kind === "point" && step.op === "point_on") {
+        const c = nodeMap.get(step.curve);
+        if (!c) throw new Error("Point-on input missing.");
+        const constraint = { kind: c.kind, id: c.id };
+        if (geom === GeometryType.SPHERICAL) {
+          const plane = getSpherePlaneFromConstraint(doc, constraint);
+          if (!plane) throw new Error("Invalid spherical curve.");
+          const hit = step.sphereHint ? closestPointOnSpherePlaneCircle(step.sphereHint, plane) : defaultPointOnSpherePlane(plane);
+          const isOutput = tool.output.kind === "point" && tool.output.nodeId === step.id;
+          const id = isOutput ? createSpherePoint(doc, hit, [constraint]) : createDebugSpherePoint(hit, [constraint]);
+          addPoint(id, !isOutput);
+          nodeMap.set(step.id, { kind: "point", id });
+          continue;
+        }
+
+        const curve = get2DCurveFromConstraint(geom, doc, constraint);
+        if (!curve) throw new Error("Invalid curve.");
+        let hint = step.curveHint;
+        if (curve.kind === "line" && step.lineOffsetRef) {
+          const lineOffset = buildLineOffsetForStep(step, nodeMap, doc);
+          if (lineOffset) {
+            const tCenter = lineParamOnCurve(curve, lineOffset.origin);
+            if (Number.isFinite(tCenter)) {
+              hint = { mode: "line", value: tCenter + lineOffset.offset };
+            }
+          }
+        }
+        const hit = pointOnCurve2D(curve, hint);
+        const isOutput = tool.output.kind === "point" && tool.output.nodeId === step.id;
+        const id = isOutput ? create2DPoint(doc, hit, [constraint]) : createDebug2DPoint(hit, [constraint]);
+        addPoint(id, !isOutput);
+        nodeMap.set(step.id, { kind: "point", id });
+        continue;
+      }
+    }
+
+    const outputRef = nodeMap.get(tool.output.nodeId);
+    if (!outputRef) throw new Error("Output missing.");
+    return { output: outputRef, error: null };
+  } catch (err) {
+    errorMessage = err instanceof Error ? err.message : "Unable to apply tool.";
+    // Keep debug geometry for inspection; user can undo to clear.
+    // cleanup();
+    return { output: null, error: errorMessage };
+  }
+}
+
+/**
+ * @param {GeometryType} geom
+ * @param {import("./geom2d.js").Curve2D} curveA
+ * @param {import("./geom2d.js").Curve2D} curveB
+ * @param {{mode:"line"|"angle", value:number} | null} hintA
+ * @param {{mode:"line"|"angle", value:number} | null} hintB
+ * @param {{lineCurve:{kind:"line", a:number,b:number,c:number}, refPoint:{x:number,y:number}, value:number} | null} lineRef
+ * @param {{lineCurve:{kind:"line", a:number,b:number,c:number}, sign:number} | null} lineSide
+ * @param {{centerA:{x:number,y:number}, centerB:{x:number,y:number}, sign:number} | null} circleSide
+ * @param {{origin:{x:number,y:number}, direction:{x:number,y:number}, sign:number} | null} orientRef
+ * @param {{origin:{x:number,y:number}, other:{x:number,y:number}, angle:number} | null} pairRef
+ * @param {Array<{x:number,y:number}> | null} avoidPoints
+ * @param {Array<{x:number,y:number}> | null} preHits
+ * @returns {{x:number,y:number} | null}
+ */
+function pick2DIntersection(
+  geom,
+  curveA,
+  curveB,
+  hintA,
+  hintB,
+  lineRef,
+  lineSide,
+  circleSide,
+  orientRef,
+  pairRef,
+  avoidPoints,
+  preHits,
+) {
+  const rawHits = preHits ?? intersectCurves(curveA, curveB);
+  const hits = rawHits.filter((p) => is2DPointInDomain(geom, p));
+  if (hits.length === 0) return null;
+  let candidates = hits;
+  if (avoidPoints && avoidPoints.length > 0) {
+    const eps2 = 1e-10;
+    const filtered = hits.filter((h) =>
+      avoidPoints.every((p) => {
+        const dx = h.x - p.x;
+        const dy = h.y - p.y;
+        return dx * dx + dy * dy > eps2;
+      }),
+    );
+    if (filtered.length > 0) candidates = filtered;
+  }
+  if (lineSide) {
+    const filtered = hits.filter((h) => {
+      const value = lineSide.lineCurve.a * h.x + lineSide.lineCurve.b * h.y + lineSide.lineCurve.c;
+      const sign = Math.sign(value);
+      return sign !== 0 && sign === lineSide.sign;
+    });
+    if (filtered.length === 1) return filtered[0];
+    if (filtered.length > 1) candidates = filtered;
+  }
+  if (circleSide) {
+    const filtered = hits.filter((h) => {
+      const cross =
+        (circleSide.centerB.x - circleSide.centerA.x) * (h.y - circleSide.centerA.y) -
+        (circleSide.centerB.y - circleSide.centerA.y) * (h.x - circleSide.centerA.x);
+      const sign = Math.sign(cross);
+      return sign !== 0 && sign === circleSide.sign;
+    });
+    if (filtered.length === 1) return filtered[0];
+    if (filtered.length > 1) candidates = filtered;
+  }
+  if (orientRef) {
+    const filtered = candidates.filter((h) => {
+      const vDir = { x: orientRef.direction.x - orientRef.origin.x, y: orientRef.direction.y - orientRef.origin.y };
+      const vPt = { x: h.x - orientRef.origin.x, y: h.y - orientRef.origin.y };
+      const cross = vDir.x * vPt.y - vDir.y * vPt.x;
+      const sign = Math.sign(cross);
+      return sign !== 0 && sign === orientRef.sign;
+    });
+    if (filtered.length === 1) return filtered[0];
+    if (filtered.length > 1) candidates = filtered;
+  }
+  if (!hintA && !hintB && !lineRef && !pairRef) return candidates[0];
+  let best = candidates[0];
+  let bestScore = Infinity;
+  const pairOrigin = pairRef ? pairRef.origin : null;
+  const pairOther = pairRef ? pairRef.other : null;
+  const pairAngle = pairRef ? pairRef.angle : 0;
+  const pairVec =
+    pairOrigin && pairOther
+      ? { x: pairOther.x - pairOrigin.x, y: pairOther.y - pairOrigin.y }
+      : null;
+  for (const h of candidates) {
+    let score = 0;
+    let used = false;
+    if (hintA) {
+      const d = curveParamDiff(curveA, hintA, h);
+      if (d != null) {
+        score += d * d;
+        used = true;
+      }
+    }
+    if (hintB) {
+      const d = curveParamDiff(curveB, hintB, h);
+      if (d != null) {
+        score += d * d;
+        used = true;
+      }
+    }
+    if (lineRef) {
+      const t = lineParamOnCurve(lineRef.lineCurve, h);
+      const tRef = lineParamOnCurve(lineRef.lineCurve, lineRef.refPoint);
+      if (Number.isFinite(t) && Number.isFinite(tRef)) {
+        const d = (t - tRef) - lineRef.value;
+        score += d * d;
+        used = true;
+      }
+    }
+    if (pairRef && pairOrigin && pairVec) {
+      const vPt = { x: h.x - pairOrigin.x, y: h.y - pairOrigin.y };
+      const cross = pairVec.x * vPt.y - pairVec.y * vPt.x;
+      const dot = pairVec.x * vPt.x + pairVec.y * vPt.y;
+      if (Number.isFinite(cross) && Number.isFinite(dot)) {
+        const ang = Math.atan2(cross, dot);
+        const d = angleDiff(ang, pairAngle);
+        score += d * d;
+        used = true;
+      }
+    }
+    if (used && score < bestScore) {
+      bestScore = score;
+      best = h;
+    }
+  }
+  return best;
+}
+
+/**
+ * @param {{normal:{x:number,y:number,z:number}, d:number}} planeA
+ * @param {{normal:{x:number,y:number,z:number}, d:number}} planeB
+ * @param {{x:number,y:number,z:number} | undefined} hint
+ * @returns {{x:number,y:number,z:number} | null}
+ */
+function pickSphereIntersection(planeA, planeB, hint) {
+  const hits = intersectSpherePlanes(planeA, planeB);
+  if (!hits || hits.length === 0) return null;
+  if (!hint) return norm3(hits[0]);
+  let best = norm3(hits[0]);
+  let bestDot = dot3(best, hint);
+  for (let i = 1; i < hits.length; i++) {
+    const u = norm3(hits[i]);
+    const d = dot3(u, hint);
+    if (d > bestDot) {
+      bestDot = d;
+      best = u;
+    }
+  }
+  return best;
+}
+
+/**
+ * @param {import("./geom2d.js").Curve2D} curve
+ * @param {{mode:"line"|"angle", value:number} | undefined} hint
+ * @returns {{x:number,y:number}}
+ */
+function pointOnCurve2D(curve, hint) {
+  if (curve.kind === "line") {
+    const n = Math.hypot(curve.a, curve.b) || 1;
+    const a = curve.a / n;
+    const b = curve.b / n;
+    const c = curve.c / n;
+    const ref = { x: -a * c, y: -b * c };
+    const dir = { x: -b, y: a };
+    const t = hint && hint.mode === "line" ? hint.value : 0;
+    return { x: ref.x + dir.x * t, y: ref.y + dir.y * t };
+  }
+  const ang = hint && hint.mode === "angle" ? hint.value : 0;
+  return { x: curve.cx + curve.r * Math.cos(ang), y: curve.cy + curve.r * Math.sin(ang) };
+}
+
+/**
+ * @param {{normal:{x:number,y:number,z:number}, d:number}} plane
+ * @returns {{x:number,y:number,z:number}}
+ */
+function defaultPointOnSpherePlane(plane) {
+  return closestPointOnSpherePlaneCircle({ x: 1, y: 0, z: 0 }, plane);
+}
+
+/**
+ * @param {{curveHints?: Array<{ nodeId: string, mode: "line" | "angle", value: number }>}} step
+ * @param {Array<{kind:"line"|"circle", id:string}>} constraints
+ */
+function buildIntersectionHintsForStep(step, constraints) {
+  if (!step.curveHints || step.curveHints.length === 0) return undefined;
+  const out = [];
+  for (const h of step.curveHints) {
+    const idx = h.nodeId === step.a ? 0 : h.nodeId === step.b ? 1 : -1;
+    if (idx === -1) continue;
+    const ref = constraints[idx];
+    out.push({ id: ref.id, mode: h.mode, value: h.value });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * Build line-relative hint for selecting circle-line intersections.
+ *
+ * @param {{lineRef?: { lineNodeId: string, refPointNodeId: string, value: number }}} step
+ * @param {Map<string, {kind:"point"|"line"|"circle", id:string}>} nodeMap
+ * @param {any} doc
+ * @param {GeometryType} geom
+ * @returns {{lineCurve:{kind:"line", a:number,b:number,c:number}, refPoint:{x:number,y:number}, value:number} | null}
+ */
+function buildLineRefForStep(step, nodeMap, doc, geom) {
+  if (!step.lineRef) return null;
+  const lineNode = nodeMap.get(step.lineRef.lineNodeId);
+  const refNode = nodeMap.get(step.lineRef.refPointNodeId);
+  if (!lineNode || lineNode.kind !== "line") return null;
+  if (!refNode || refNode.kind !== "point") return null;
+  const line = doc.lines.find((l) => l.id === lineNode.id);
+  if (!line) return null;
+  const curve = derive2DLineCurve(geom, doc, line);
+  if (!curve || curve.kind !== "line") return null;
+  const refPoint = doc.points.find((p) => p.id === refNode.id);
+  if (!refPoint) return null;
+  return {
+    lineCurve: curve,
+    refPoint: { x: refPoint.x, y: refPoint.y },
+    value: step.lineRef.value,
+  };
+}
+
+/**
+ * Build line-side hint for selecting circle-line intersections relative to the other input line.
+ *
+ * @param {{lineSide?: { lineNodeId: string, sign: number }}} step
+ * @param {Map<string, {kind:"point"|"line"|"circle", id:string}>} nodeMap
+ * @param {any} doc
+ * @param {GeometryType} geom
+ * @returns {{lineCurve:{kind:"line", a:number,b:number,c:number}, sign:number} | null}
+ */
+function buildLineSideForStep(step, nodeMap, doc, geom) {
+  if (!step.lineSide) return null;
+  const lineNode = nodeMap.get(step.lineSide.lineNodeId);
+  if (!lineNode || lineNode.kind !== "line") return null;
+  const line = doc.lines.find((l) => l.id === lineNode.id);
+  if (!line) return null;
+  const curve = derive2DLineCurve(geom, doc, line);
+  if (!curve || curve.kind !== "line") return null;
+  const n = Math.hypot(curve.a, curve.b) || 1;
+  let a = curve.a / n;
+  let b = curve.b / n;
+  let c = curve.c / n;
+  if (a < 0 || (Math.abs(a) < 1e-12 && b < 0)) {
+    a = -a;
+    b = -b;
+    c = -c;
+  }
+  return { lineCurve: { kind: "line", a, b, c }, sign: step.lineSide.sign };
+}
+
+/**
+ * Build circle side hint for choosing between circle-circle intersections.
+ *
+ * @param {{circleSide?: { sign: number }, a: string, b: string}} step
+ * @param {Map<string, {kind:"point"|"line"|"circle", id:string}>} nodeMap
+ * @param {any} doc
+ * @param {GeometryType} geom
+ * @returns {{centerA:{x:number,y:number}, centerB:{x:number,y:number}, sign:number} | null}
+ */
+function buildCircleSideForStep(step, nodeMap, doc, geom) {
+  if (geom === GeometryType.SPHERICAL) return null;
+  if (!step.circleSide) return null;
+  const aNode = nodeMap.get(step.a);
+  const bNode = nodeMap.get(step.b);
+  if (!aNode || !bNode) return null;
+  if (aNode.kind !== "circle" || bNode.kind !== "circle") return null;
+  const circleA = doc.circles.find((c) => c.id === aNode.id);
+  const circleB = doc.circles.find((c) => c.id === bNode.id);
+  if (!circleA || !circleB) return null;
+  const cA = doc.points.find((p) => p.id === circleA.center);
+  const cB = doc.points.find((p) => p.id === circleB.center);
+  if (!cA || !cB) return null;
+  return {
+    centerA: { x: cA.x, y: cA.y },
+    centerB: { x: cB.x, y: cB.y },
+    sign: step.circleSide.sign,
+  };
+}
+
+/**
+ * Build orientation hint for selecting circle-circle intersections using a shared origin.
+ *
+ * @param {{orientRef?: { originNodeId: string, directionNodeId: string, sign: number }}} step
+ * @param {Map<string, {kind:"point"|"line"|"circle", id:string}>} nodeMap
+ * @param {any} doc
+ * @returns {{origin:{x:number,y:number}, direction:{x:number,y:number}, sign:number} | null}
+ */
+function buildOrientRefForStep(step, nodeMap, doc) {
+  if (!step.orientRef) return null;
+  const originNode = nodeMap.get(step.orientRef.originNodeId);
+  const dirNode = nodeMap.get(step.orientRef.directionNodeId);
+  if (!originNode || originNode.kind !== "point") return null;
+  if (!dirNode || dirNode.kind !== "point") return null;
+  const originPoint = doc.points.find((p) => p.id === originNode.id);
+  const dirPoint = doc.points.find((p) => p.id === dirNode.id);
+  if (!originPoint || !dirPoint) return null;
+  return {
+    origin: { x: originPoint.x, y: originPoint.y },
+    direction: { x: dirPoint.x, y: dirPoint.y },
+    sign: step.orientRef.sign,
+  };
+}
+
+/**
+ * Build pair hint for selecting circle-line intersections relative to a prior point on the same circle.
+ *
+ * @param {{pairRef?: { originNodeId: string, otherPointNodeId: string, angle: number }}} step
+ * @param {Map<string, {kind:"point"|"line"|"circle", id:string}>} nodeMap
+ * @param {any} doc
+ * @returns {{origin:{x:number,y:number}, other:{x:number,y:number}, angle:number} | null}
+ */
+function buildPairRefForStep(step, nodeMap, doc) {
+  if (!step.pairRef) return null;
+  const originNode = nodeMap.get(step.pairRef.originNodeId);
+  const otherNode = nodeMap.get(step.pairRef.otherPointNodeId);
+  if (!originNode || originNode.kind !== "point") return null;
+  if (!otherNode || otherNode.kind !== "point") return null;
+  const originPoint = doc.points.find((p) => p.id === originNode.id);
+  const otherPoint = doc.points.find((p) => p.id === otherNode.id);
+  if (!originPoint || !otherPoint) return null;
+  return {
+    origin: { x: originPoint.x, y: originPoint.y },
+    other: { x: otherPoint.x, y: otherPoint.y },
+    angle: step.pairRef.angle,
+  };
+}
+
+/**
+ * Build line-offset hint for point-on-line steps relative to an origin point.
+ *
+ * @param {{lineOffsetRef?: { originNodeId: string, offset: number }}} step
+ * @param {Map<string, {kind:"point"|"line"|"circle", id:string}>} nodeMap
+ * @param {any} doc
+ * @returns {{origin:{x:number,y:number}, offset:number} | null}
+ */
+function buildLineOffsetForStep(step, nodeMap, doc) {
+  if (!step.lineOffsetRef) return null;
+  const originNode = nodeMap.get(step.lineOffsetRef.originNodeId);
+  if (!originNode || originNode.kind !== "point") return null;
+  const originPoint = doc.points.find((p) => p.id === originNode.id);
+  if (!originPoint) return null;
+  return { origin: { x: originPoint.x, y: originPoint.y }, offset: step.lineOffsetRef.offset };
+}
+
+/**
+ * Build avoid-point hint for selecting the "other" intersection.
+ *
+ * @param {{avoidPointRef?: { pointNodeId: string }}} step
+ * @param {Map<string, {kind:"point"|"line"|"circle", id:string}>} nodeMap
+ * @param {any} doc
+ * @returns {{x:number,y:number} | null}
+ */
+function buildAvoidPointForStep(step, nodeMap, doc) {
+  if (!step.avoidPointRef) return null;
+  const pointNode = nodeMap.get(step.avoidPointRef.pointNodeId);
+  if (!pointNode || pointNode.kind !== "point") return null;
+  const p = doc.points.find((pt) => pt.id === pointNode.id);
+  if (!p) return null;
+  return { x: p.x, y: p.y };
 }
 
 /**
@@ -954,11 +1831,13 @@ function snap2DPointToCurves(geom, doc, view, posScreen, w) {
   };
 
   for (const line of doc.lines) {
+    if (line.hidden) continue;
     const curve = derive2DLineCurve(geom, doc, line);
     if (!curve) continue;
     consider(curve, { kind: "line", id: line.id });
   }
   for (const circle of doc.circles) {
+    if (circle.hidden) continue;
     const curve = derive2DCircleCurve(geom, doc, circle);
     if (!curve) continue;
     consider(curve, { kind: "circle", id: circle.id });
@@ -1013,11 +1892,13 @@ function snapSpherePointToCurves(doc, view, vp, posScreen, p) {
   };
 
   for (const line of doc.lines) {
+    if (line.hidden) continue;
     const plane = deriveSphereGreatCircle(doc, line);
     if (!plane) continue;
     considerPlane(plane, { kind: "line", id: line.id });
   }
   for (const circle of doc.circles) {
+    if (circle.hidden) continue;
     const plane = deriveSphereCircle(doc, circle);
     if (!plane) continue;
     considerPlane(plane, { kind: "circle", id: circle.id });

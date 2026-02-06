@@ -124,6 +124,10 @@ body {
   letter-spacing: 0.08em;
 }
 
+#customToolsTitle {
+  display: none;
+}
+
 .tool-list {
   display: flex;
   flex-direction: column;
@@ -148,6 +152,20 @@ body {
 .tool-btn.is-active {
   border-color: var(--accent);
   background: var(--accent-weak);
+}
+
+.build-tool-btn {
+  height: 36px;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.build-tool-btn:hover {
+  border-color: #b8c2cc;
 }
 
 .tool-hint {

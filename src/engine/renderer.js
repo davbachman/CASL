@@ -127,12 +127,14 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
 
   // Draw curves (lines/circles)
   for (const circle of doc.circles) {
+    if (circle.hidden) continue;
     const curve = derive2DCircleCurve(geom, doc, circle);
     if (!curve) continue;
     const isSelected =
-      state.pending?.tool === "intersect" &&
-      state.pending.firstObject.kind === "circle" &&
-      state.pending.firstObject.id === circle.id;
+      isToolRefSelected(state, "circle", circle.id) ||
+      (state.pending?.tool === "intersect" &&
+        state.pending.firstObject.kind === "circle" &&
+        state.pending.firstObject.id === circle.id);
     const c0 = doc.points.find((p) => p.id === circle.center);
     const r0 = doc.points.find((p) => p.id === circle.radiusPoint);
     const labelAnchorWorld =
@@ -146,6 +148,7 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
   }
 
   for (const line of doc.lines) {
+    if (line.hidden) continue;
     const curve = derive2DLineCurve(geom, doc, line);
     if (!curve) continue;
     const p1 = doc.points.find((p) => p.id === line.p1);
@@ -165,9 +168,10 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
           }
         : null;
     const isSelected =
-      state.pending?.tool === "intersect" &&
-      state.pending.firstObject.kind === "line" &&
-      state.pending.firstObject.id === line.id;
+      isToolRefSelected(state, "line", line.id) ||
+      (state.pending?.tool === "intersect" &&
+        state.pending.firstObject.kind === "line" &&
+        state.pending.firstObject.id === line.id);
     draw2DLineObject(
       ctx,
       view,
@@ -185,7 +189,11 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
 
   // Draw points
   for (const p of doc.points) {
-    draw2DPoint(ctx, view, p, state.pending?.tool !== "intersect" && state.pending?.firstPointId === p.id);
+    if (p.hidden) continue;
+    const highlight =
+      isToolRefSelected(state, "point", p.id) ||
+      (state.pending?.tool !== "intersect" && state.pending?.firstPointId === p.id);
+    draw2DPoint(ctx, view, p, highlight);
   }
 
   ctx.restore();
@@ -379,8 +387,20 @@ function draw2DPoint(ctx, view, p, highlight) {
   ctx.restore();
 }
 
+/**
+ * @param {AppState} state
+ * @param {"point"|"line"|"circle"} kind
+ * @param {string} id
+ */
+function isToolRefSelected(state, kind, id) {
+  if (state.toolBuilder?.inputs?.some((ref) => ref.kind === kind && ref.id === id)) return true;
+  if (state.toolUse?.inputs?.some((ref) => ref.kind === kind && ref.id === id)) return true;
+  return false;
+}
+
 /** @param {CanvasRenderingContext2D} ctx @param {string} label @param {number} x @param {number} y */
 function drawCurveLabel(ctx, label, x, y) {
+  if (!label) return;
   ctx.save();
   ctx.globalAlpha = 1;
   ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
@@ -645,29 +665,37 @@ function drawSphere(ctx, w, h, dpr, state, doc, view) {
 
   // Draw curves
   for (const circle of doc.circles) {
+    if (circle.hidden) continue;
     const plane = deriveSphereCircle(doc, circle);
     if (!plane) continue;
     const isSelected =
-      state.pending?.tool === "intersect" &&
-      state.pending.firstObject.kind === "circle" &&
-      state.pending.firstObject.id === circle.id;
+      isToolRefSelected(state, "circle", circle.id) ||
+      (state.pending?.tool === "intersect" &&
+        state.pending.firstObject.kind === "circle" &&
+        state.pending.firstObject.id === circle.id);
     drawSpherePlaneCurve(ctx, view, vp, plane, circle.style, circle.label, isSelected);
   }
 
   for (const line of doc.lines) {
+    if (line.hidden) continue;
     const plane = deriveSphereGreatCircle(doc, line);
     if (!plane) continue;
     const isSelected =
-      state.pending?.tool === "intersect" &&
-      state.pending.firstObject.kind === "line" &&
-      state.pending.firstObject.id === line.id;
+      isToolRefSelected(state, "line", line.id) ||
+      (state.pending?.tool === "intersect" &&
+        state.pending.firstObject.kind === "line" &&
+        state.pending.firstObject.id === line.id);
     drawSpherePlaneCurve(ctx, view, vp, plane, line.style, line.label, isSelected);
   }
 
   // Draw points
   for (const p of doc.points) {
     if (p.z == null) continue;
-    drawSpherePoint(ctx, view, vp, p, state.pending?.tool !== "intersect" && state.pending?.firstPointId === p.id);
+    if (p.hidden) continue;
+    const highlight =
+      isToolRefSelected(state, "point", p.id) ||
+      (state.pending?.tool !== "intersect" && state.pending?.firstPointId === p.id);
+    drawSpherePoint(ctx, view, vp, p, highlight);
   }
 
   ctx.restore();
