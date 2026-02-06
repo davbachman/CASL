@@ -51,10 +51,81 @@ body {
   letter-spacing: 0.2px;
 }
 
-.menu-group {
+.menu-menubar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+}
+
+.menu-dropdown {
+  position: relative;
+}
+
+.menu-top-btn {
+  list-style: none;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.menu-top-btn::-webkit-details-marker {
+  display: none;
+}
+
+.menu-top-btn::marker {
+  content: "";
+}
+
+.menu-dropdown[open] > .menu-top-btn {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+}
+
+.menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 220px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  z-index: 30;
+}
+
+.menu-item {
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.menu-item:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.menu-item.is-selected {
+  background: var(--accent-weak);
+  color: #0b3ea1;
+}
+
+.menu-item:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .menu-label {
@@ -98,6 +169,10 @@ body {
   font-size: 12px;
   color: var(--muted);
   font-family: var(--mono);
+}
+
+.legacy-controls {
+  display: none;
 }
 
 .main {
@@ -318,6 +393,20 @@ body {
   letter-spacing: 0.08em;
 }
 
+.history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.history-print-btn {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
 .history-empty {
   font-size: 12px;
   color: var(--muted);
@@ -336,4 +425,17 @@ body {
 
 .history-list li {
   margin-bottom: 6px;
+}
+
+.file-input-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  border: 0;
+  padding: 0;
+  clip: rect(0 0 0 0);
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
 }

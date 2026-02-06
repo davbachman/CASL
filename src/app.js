@@ -1,8 +1,8 @@
-import { GeometryType, ToolType, createEmptyDoc, createInitialState } from "./engine/state.js";
+import { GeometryType, ToolType, createDefaultView, createEmptyDoc, createInitialState } from "./engine/state.js";
 import { createHistory } from "./engine/history.js";
-import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260205-32";
+import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260206-33";
 import { installContextMenu } from "./ui/contextMenu.js";
-import { attachCanvasController } from "./engine/inputController.js?v=20260205-32";
+import { attachCanvasController } from "./engine/inputController.js?v=20260206-33";
 import { createRenderer } from "./engine/renderer.js";
 import { makeId } from "./engine/util/ids.js";
 
@@ -14,6 +14,12 @@ import { makeId } from "./engine/util/ids.js";
  *  undoButton: HTMLButtonElement,
  *  clearButton: HTMLButtonElement,
  *  showStepsButton: HTMLButtonElement,
+ *  saveToolsButton: HTMLButtonElement,
+ *  importToolsButton: HTMLButtonElement,
+ *  saveConstructionButton: HTMLButtonElement,
+ *  importConstructionButton: HTMLButtonElement,
+ *  importToolsInput: HTMLInputElement,
+ *  importConstructionInput: HTMLInputElement,
  *  historyToggleButton: HTMLButtonElement,
  *  buildToolButton: HTMLButtonElement,
  *  customToolList: HTMLDivElement,
@@ -23,7 +29,8 @@ import { makeId } from "./engine/util/ids.js";
  *  contextMenu: HTMLDivElement,
  *  historyPane: HTMLDivElement,
  *  historyList: HTMLOListElement,
- *  historyEmpty: HTMLDivElement
+ *  historyEmpty: HTMLDivElement,
+ *  printHistoryButton: HTMLButtonElement
  * }} deps
  */
 export function createApp(deps) {
@@ -64,6 +71,18 @@ export function createApp(deps) {
       }
     }
   };
+
+  const clearAllUndo = () => {
+    for (const geom of Object.values(GeometryType)) history.clear(geom);
+    updateUndoButton();
+  };
+
+  const getHistoryLinesForDoc = (doc) => {
+    const steps = doc.historySteps ?? [];
+    return steps.map((step) => formatHistoryStep(doc, step)).filter((line) => typeof line === "string");
+  };
+
+  const getActiveHistoryLines = () => getHistoryLinesForDoc(state.docs[state.activeGeometry]);
 
   const pushHistory = () => {
     history.push(state.activeGeometry);
@@ -210,6 +229,131 @@ export function createApp(deps) {
     updateShowStepsButton();
     renderer.requestRender(true);
   });
+
+  deps.saveToolsButton.addEventListener("click", () => {
+    const payload = {
+      kind: "compass-straightedge-tools",
+      version: 1,
+      savedAt: new Date().toISOString(),
+      customTools: safeClone(state.customTools),
+    };
+    downloadJsonFile(`tools-${dateStamp()}.json`, payload);
+  });
+
+  deps.importToolsButton.addEventListener("click", () => {
+    deps.importToolsInput.value = "";
+    deps.importToolsInput.click();
+  });
+
+  deps.importToolsInput.addEventListener("change", () => {
+    void (async () => {
+      const file = deps.importToolsInput.files?.[0];
+      deps.importToolsInput.value = "";
+      if (!file) return;
+      try {
+        const payload = await readJsonFile(file);
+        const rawTools =
+          Array.isArray(payload) || payload == null ? payload : (payload.customTools ?? payload.tools ?? null);
+        const imported = normalizeCustomTools(rawTools, state.nextToolId);
+        if (imported.tools.length === 0) throw new Error("No valid tools found in file.");
+        state.customTools.push(...imported.tools);
+        state.nextToolId = imported.nextToolId;
+        renderCustomTools();
+        updateToolHint();
+        renderer.requestRender(true);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unable to import tools.";
+        window.alert(`Import tools failed: ${msg}`);
+      }
+    })();
+  });
+
+  deps.saveConstructionButton.addEventListener("click", () => {
+    const payload = {
+      kind: "compass-straightedge-construction",
+      version: 1,
+      savedAt: new Date().toISOString(),
+      state: {
+        activeGeometry: state.activeGeometry,
+        activeTool: state.activeTool,
+        showSteps: state.showSteps,
+        nextToolId: state.nextToolId,
+        docs: safeClone(state.docs),
+        views: safeClone(state.views),
+        customTools: safeClone(state.customTools),
+      },
+    };
+    downloadJsonFile(`construction-${dateStamp()}.json`, payload);
+  });
+
+  deps.importConstructionButton.addEventListener("click", () => {
+    deps.importConstructionInput.value = "";
+    deps.importConstructionInput.click();
+  });
+
+  deps.importConstructionInput.addEventListener("change", () => {
+    void (async () => {
+      const file = deps.importConstructionInput.files?.[0];
+      deps.importConstructionInput.value = "";
+      if (!file) return;
+      try {
+        const payloadRoot = await readJsonFile(file);
+        const payload = payloadRoot && typeof payloadRoot === "object" ? (payloadRoot.state ?? payloadRoot) : null;
+        if (!payload || typeof payload !== "object") throw new Error("Invalid construction file.");
+
+        const importedDocs = Object.create(null);
+        const importedViews = Object.create(null);
+        for (const geom of Object.values(GeometryType)) {
+          importedDocs[geom] = normalizeConstructionDoc(
+            /** @type {GeometryType} */ (geom),
+            /** @type {any} */ (payload.docs?.[geom]),
+          );
+          importedViews[geom] = normalizeViewState(
+            /** @type {GeometryType} */ (geom),
+            /** @type {any} */ (payload.views?.[geom]),
+          );
+        }
+
+        const importedTools = normalizeCustomTools(payload.customTools ?? payload.tools ?? [], 1);
+        const nextGeometry =
+          typeof payload.activeGeometry === "string" && Object.values(GeometryType).includes(payload.activeGeometry)
+            ? payload.activeGeometry
+            : GeometryType.EUCLIDEAN;
+
+        state.docs = importedDocs;
+        state.views = importedViews;
+        state.customTools = importedTools.tools;
+        state.nextToolId = importedTools.nextToolId;
+        state.activeGeometry = /** @type {GeometryType} */ (nextGeometry);
+        state.showSteps = !!payload.showSteps;
+        state.activeTool = normalizeImportedActiveTool(payload.activeTool, importedTools.idMap, state.customTools);
+        state.pending = null;
+        state.selection = null;
+        state.toolUse = null;
+        state.toolUseError = null;
+        state.toolBuilder = null;
+        ensureInversiveInfinityPoint(state);
+        clearAllUndo();
+        deps.geometrySelect.value = state.activeGeometry;
+        ctxMenu.close();
+        renderCustomTools();
+        updateDebugVisibility();
+        updateShowStepsButton();
+        updateToolHint();
+        lastHistorySignature = "";
+        renderer.requestRender(true);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unable to import construction.";
+        window.alert(`Import construction failed: ${msg}`);
+      }
+    })();
+  });
+
+  deps.printHistoryButton.addEventListener("click", () => {
+    const lines = getActiveHistoryLines();
+    printHistoryLines(geometryDisplayName(state.activeGeometry), lines);
+  });
+
   window.addEventListener("keydown", (e) => {
     if (!(e.metaKey || e.ctrlKey) || e.shiftKey) return;
     if (e.key.toLowerCase() !== "z") return;
@@ -288,8 +432,7 @@ export function createApp(deps) {
 
   function renderHistoryIfNeeded() {
     const doc = state.docs[state.activeGeometry];
-    const steps = doc.historySteps ?? [];
-    const lines = steps.map((step) => formatHistoryStep(doc, step)).filter(Boolean);
+    const lines = getHistoryLinesForDoc(doc);
     const signature = lines.join("\n");
     if (signature === lastHistorySignature) return;
     lastHistorySignature = signature;
@@ -346,6 +489,231 @@ export function createApp(deps) {
     }
     setActiveToolButton(state.activeTool);
   }
+}
+
+/** @param {unknown} value */
+function safeClone(value) {
+  // @ts-ignore - older browsers may not have structuredClone
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function dateStamp() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mi = String(now.getMinutes()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}-${hh}${mi}`;
+}
+
+/**
+ * @param {string} filename
+ * @param {unknown} payload
+ */
+function downloadJsonFile(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+/**
+ * @param {File} file
+ * @returns {Promise<any>}
+ */
+async function readJsonFile(file) {
+  const text = await file.text();
+  return JSON.parse(text);
+}
+
+/** @param {string} s */
+function escapeHtml(s) {
+  return s
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+/**
+ * @param {string} geometryLabel
+ * @param {string[]} lines
+ */
+function printHistoryLines(geometryLabel, lines) {
+  const popup = window.open("", "_blank", "width=860,height=700");
+  if (!popup) {
+    window.alert("Unable to open print window. Please allow pop-ups and try again.");
+    return;
+  }
+  const safeTitle = escapeHtml(`${geometryLabel} Construction History`);
+  const content =
+    lines.length === 0
+      ? "<p>No steps yet.</p>"
+      : `<ol>${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ol>`;
+  popup.document.open();
+  popup.document.write(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>${safeTitle}</title>
+    <style>
+      body { font-family: Georgia, "Times New Roman", serif; margin: 24px; color: #111; }
+      h1 { margin: 0 0 12px; font-size: 20px; }
+      ol { margin: 0; padding-left: 24px; line-height: 1.45; }
+      li { margin-bottom: 8px; }
+      p { margin: 0; font-size: 15px; }
+      @media print { body { margin: 14mm; } }
+    </style>
+  </head>
+  <body>
+    <h1>${safeTitle}</h1>
+    ${content}
+  </body>
+</html>`);
+  popup.document.close();
+  popup.focus();
+  setTimeout(() => popup.print(), 100);
+}
+
+/**
+ * @param {unknown} rawTools
+ * @param {number} nextToolIdStart
+ */
+function normalizeCustomTools(rawTools, nextToolIdStart) {
+  /** @type {Array<import("./engine/state.js").CustomTool>} */
+  const tools = [];
+  /** @type {Map<string, string>} */
+  const idMap = new Map();
+  const list = Array.isArray(rawTools) ? rawTools : [];
+  let nextToolId = Math.max(1, Math.floor(nextToolIdStart || 1));
+
+  for (let i = 0; i < list.length; i++) {
+    const raw = list[i];
+    const normalized = normalizeCustomTool(raw);
+    if (!normalized) continue;
+    const sourceId = raw && typeof raw === "object" && typeof raw.id === "string" ? raw.id : `legacy_${i + 1}`;
+    const nextId = makeId("t", nextToolId++);
+    normalized.id = nextId;
+    tools.push(normalized);
+    idMap.set(sourceId, nextId);
+  }
+
+  return { tools, idMap, nextToolId };
+}
+
+/** @param {unknown} raw */
+function normalizeCustomTool(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const name = typeof raw.name === "string" && raw.name.trim() ? raw.name.trim() : "Custom Tool";
+  if (!Array.isArray(raw.inputs) || !Array.isArray(raw.steps)) return null;
+  if (!raw.output || typeof raw.output !== "object") return null;
+  if (!isGeomRefKind(raw.output.kind) || typeof raw.output.nodeId !== "string" || !raw.output.nodeId) return null;
+  const inputs = raw.inputs
+    .map((input) =>
+      input && typeof input === "object" && isGeomRefKind(input.kind) ? { kind: input.kind } : null,
+    )
+    .filter((input) => !!input);
+  return {
+    id: "",
+    name,
+    inputs,
+    steps: safeClone(raw.steps),
+    output: { kind: raw.output.kind, nodeId: raw.output.nodeId },
+  };
+}
+
+/** @param {unknown} kind */
+function isGeomRefKind(kind) {
+  return kind === "point" || kind === "line" || kind === "circle";
+}
+
+/**
+ * @param {GeometryType} geom
+ * @param {unknown} rawDoc
+ * @returns {import("./engine/state.js").ConstructionDoc}
+ */
+function normalizeConstructionDoc(geom, rawDoc) {
+  const fallback = createEmptyDoc(geom);
+  if (!rawDoc || typeof rawDoc !== "object") return fallback;
+  const doc = safeClone(rawDoc);
+  if (!Array.isArray(doc.points) || !Array.isArray(doc.lines) || !Array.isArray(doc.circles)) return fallback;
+  if (!Array.isArray(doc.historySteps)) doc.historySteps = [];
+  if (!Number.isFinite(doc.nextId) || doc.nextId < 1) doc.nextId = 1;
+  if (!Number.isFinite(doc.nextPointLabel) || doc.nextPointLabel < 0) doc.nextPointLabel = 0;
+  if (!Number.isFinite(doc.nextCurveLabel) || doc.nextCurveLabel < 0) doc.nextCurveLabel = 0;
+
+  if (geom === GeometryType.INVERSIVE_EUCLIDEAN) {
+    const star = typeof doc.starPointId === "string" ? doc.points.find((p) => p?.id === doc.starPointId) : null;
+    if (!star) {
+      const locked = doc.points.find((p) => p && p.locked);
+      if (locked && typeof locked.id === "string") {
+        doc.starPointId = locked.id;
+      } else {
+        const id = makeId("p", doc.nextId++);
+        doc.points.unshift({
+          id,
+          label: "∞",
+          x: 0,
+          y: 0,
+          locked: true,
+          style: { color: "#111111", opacity: 1 },
+        });
+        doc.starPointId = id;
+      }
+    }
+  }
+
+  return doc;
+}
+
+/**
+ * @param {GeometryType} geom
+ * @param {unknown} rawView
+ * @returns {import("./engine/state.js").ViewState}
+ */
+function normalizeViewState(geom, rawView) {
+  const fallback = createDefaultView(geom);
+  if (!rawView || typeof rawView !== "object") return fallback;
+  if (geom === GeometryType.SPHERICAL) {
+    if (rawView.kind !== "sphere") return fallback;
+    const yaw = Number.isFinite(rawView.yaw) ? rawView.yaw : fallback.yaw;
+    const pitch = Number.isFinite(rawView.pitch) ? rawView.pitch : fallback.pitch;
+    const zoomRaw = Number.isFinite(rawView.zoom) ? rawView.zoom : fallback.zoom;
+    const zoom = Math.min(4, Math.max(0.2, zoomRaw));
+    return { kind: "sphere", yaw, pitch, zoom };
+  }
+  if (rawView.kind !== "2d") return fallback;
+  const scaleRaw = Number.isFinite(rawView.scale) ? rawView.scale : fallback.scale;
+  const scale = Math.min(3000, Math.max(10, scaleRaw));
+  const offsetX = Number.isFinite(rawView.offsetX) ? rawView.offsetX : fallback.offsetX;
+  const offsetY = Number.isFinite(rawView.offsetY) ? rawView.offsetY : fallback.offsetY;
+  return { kind: "2d", scale, offsetX, offsetY };
+}
+
+/**
+ * @param {unknown} rawActiveTool
+ * @param {Map<string, string>} idMap
+ * @param {Array<import("./engine/state.js").CustomTool>} customTools
+ */
+function normalizeImportedActiveTool(rawActiveTool, idMap, customTools) {
+  if (rawActiveTool === ToolType.POINT) return ToolType.POINT;
+  if (rawActiveTool === ToolType.LINE) return ToolType.LINE;
+  if (rawActiveTool === ToolType.CIRCLE) return ToolType.CIRCLE;
+  if (rawActiveTool === ToolType.INTERSECT) return ToolType.INTERSECT;
+  if (typeof rawActiveTool === "string" && rawActiveTool.startsWith("custom:")) {
+    const oldId = rawActiveTool.replace("custom:", "");
+    const mapped = idMap.get(oldId);
+    if (mapped && customTools.some((tool) => tool.id === mapped)) return `custom:${mapped}`;
+  }
+  return ToolType.LINE;
 }
 
 /** @param {GeometryType} geom */
