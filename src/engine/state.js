@@ -134,7 +134,7 @@ export const ToolType = /** @type {const} */ ({
  *  activeTool: string,
  *  docs: Record<string, ConstructionDoc>,
  *  views: Record<string, ViewState>,
- *  customTools: Record<string, CustomTool[]>,
+ *  customTools: CustomTool[],
  *  toolBuilder: ToolBuilderState | null,
  *  toolUse: null | { toolId: string, inputs: Array<{ kind: "point" | "line" | "circle", id: string }> },
  *  toolUseError?: string | null,
@@ -153,7 +153,7 @@ export function createInitialState() {
     activeTool: ToolType.LINE,
     docs: Object.create(null),
     views: Object.create(null),
-    customTools: Object.create(null),
+    customTools: [],
     toolBuilder: null,
     toolUse: null,
     toolUseError: null,
@@ -166,7 +166,6 @@ export function createInitialState() {
   for (const geom of Object.values(GeometryType)) {
     state.docs[geom] = createEmptyDoc(geom);
     state.views[geom] = createDefaultView(geom);
-    state.customTools[geom] = [];
   }
 
   return state;

@@ -1064,7 +1064,7 @@ function recordToolStep(doc, toolName, output, inputs) {
 function getActiveCustomTool(state) {
   if (!state.activeTool || !state.activeTool.startsWith("custom:")) return null;
   const id = state.activeTool.replace("custom:", "");
-  return state.customTools[state.activeGeometry]?.find((tool) => tool.id === id) ?? null;
+  return state.customTools.find((tool) => tool.id === id) ?? null;
 }
 
 /**
@@ -1085,6 +1085,8 @@ function applyCustomTool(state, geom, doc, tool, inputs, view) {
   const created = { points: [], lines: [], circles: [] };
   /** @type {Map<string, Array<{x:number,y:number}>>} */
   const intersectionReuse = new Map();
+  /** @type {Map<string, Array<{x:number,y:number,z:number}>>} */
+  const sphereIntersectionReuse = new Map();
   const debugColor = "#2e7d32";
   let debugIndex = 1;
   let errorMessage = null;
@@ -1249,8 +1251,12 @@ function applyCustomTool(state, geom, doc, tool, inputs, view) {
           const planeA = getSpherePlaneFromConstraint(doc, constraints[0]);
           const planeB = getSpherePlaneFromConstraint(doc, constraints[1]);
           if (!planeA || !planeB) throw new Error("Invalid spherical constraints.");
-          const hit = pickSphereIntersection(planeA, planeB, step.sphereHint);
+          const key = step.a < step.b ? `${step.a}|${step.b}` : `${step.b}|${step.a}`;
+          const avoid = sphereIntersectionReuse.get(key) ?? null;
+          const hit = pickSphereIntersection(planeA, planeB, step.sphereHint, avoid);
           if (!hit) throw new Error("No intersection.");
+          if (avoid) avoid.push(hit);
+          else sphereIntersectionReuse.set(key, [hit]);
           const isOutput = tool.output.kind === "point" && tool.output.nodeId === step.id;
           const id = isOutput ? createSpherePoint(doc, hit, constraints) : createDebugSpherePoint(hit, constraints);
           addPoint(id, !isOutput);
@@ -1510,16 +1516,22 @@ function pick2DIntersection(
  * @param {{normal:{x:number,y:number,z:number}, d:number}} planeA
  * @param {{normal:{x:number,y:number,z:number}, d:number}} planeB
  * @param {{x:number,y:number,z:number} | undefined} hint
+ * @param {Array<{x:number,y:number,z:number}> | null} avoidPoints
  * @returns {{x:number,y:number,z:number} | null}
  */
-function pickSphereIntersection(planeA, planeB, hint) {
+function pickSphereIntersection(planeA, planeB, hint, avoidPoints) {
   const hits = intersectSpherePlanes(planeA, planeB);
   if (!hits || hits.length === 0) return null;
-  if (!hint) return norm3(hits[0]);
-  let best = norm3(hits[0]);
+  let candidates = hits.map((h) => norm3(h));
+  if (avoidPoints && avoidPoints.length > 0) {
+    const filtered = candidates.filter((h) => avoidPoints.every((a) => dot3(h, a) < 1 - 1e-8));
+    if (filtered.length > 0) candidates = filtered;
+  }
+  if (!hint) return candidates[0];
+  let best = candidates[0];
   let bestDot = dot3(best, hint);
-  for (let i = 1; i < hits.length; i++) {
-    const u = norm3(hits[i]);
+  for (let i = 1; i < candidates.length; i++) {
+    const u = candidates[i];
     const d = dot3(u, hint);
     if (d > bestDot) {
       bestDot = d;

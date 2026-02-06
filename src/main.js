@@ -1,4 +1,4 @@
-import { createApp } from "./app.js?v=20260205-30";
+import { createApp } from "./app.js?v=20260205-32";
 
 createApp({
   canvas: /** @type {HTMLCanvasElement} */ (document.getElementById("canvas")),

@@ -1,8 +1,8 @@
 import { GeometryType, ToolType, createEmptyDoc, createInitialState } from "./engine/state.js";
 import { createHistory } from "./engine/history.js";
-import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260205-30";
+import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260205-32";
 import { installContextMenu } from "./ui/contextMenu.js";
-import { attachCanvasController } from "./engine/inputController.js?v=20260205-30";
+import { attachCanvasController } from "./engine/inputController.js?v=20260205-32";
 import { createRenderer } from "./engine/renderer.js";
 import { makeId } from "./engine/util/ids.js";
 
@@ -325,7 +325,7 @@ export function createApp(deps) {
       return;
     }
     tool.id = makeId("t", state.nextToolId++);
-    state.customTools[geom].push(tool);
+    state.customTools.push(tool);
     state.toolBuilder = null;
     renderCustomTools();
     updateToolHint();
@@ -333,7 +333,7 @@ export function createApp(deps) {
   }
 
   function renderCustomTools() {
-    const tools = state.customTools[state.activeGeometry] ?? [];
+    const tools = state.customTools;
     deps.customToolList.innerHTML = "";
     deps.customToolsTitle.style.display = tools.length > 0 ? "block" : "none";
     for (const tool of tools) {
@@ -370,7 +370,7 @@ function geometryDisplayName(geom) {
 function getActiveCustomTool(state) {
   if (!state.activeTool.startsWith("custom:")) return null;
   const id = state.activeTool.replace("custom:", "");
-  return state.customTools[state.activeGeometry]?.find((tool) => tool.id === id) ?? null;
+  return state.customTools.find((tool) => tool.id === id) ?? null;
 }
 
 /**
