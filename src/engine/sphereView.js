@@ -1,6 +1,6 @@
 import { clamp } from "./util/math.js";
 
-/** @typedef {{kind:"sphere", yaw:number, pitch:number, zoom:number}} SphereView */
+/** @typedef {{kind:"sphere", yaw:number, pitch:number, zoom:number, roll?:number}} SphereView */
 /** @typedef {{x:number,y:number,z:number}} Vec3 */
 /** @typedef {{x:number,y:number}} Vec2 */
 
@@ -11,15 +11,23 @@ import { clamp } from "./util/math.js";
  * @returns {Vec3}
  */
 export function rotateToView(view, p) {
+  const roll = Number.isFinite(view.roll) ? view.roll : 0;
+  const cr = Math.cos(roll);
+  const sr = Math.sin(roll);
   const cy = Math.cos(view.yaw);
   const sy = Math.sin(view.yaw);
   const cx = Math.cos(view.pitch);
   const sx = Math.sin(view.pitch);
 
+  // roll around z: (x,y)
+  const x0 = cr * p.x - sr * p.y;
+  const y0 = sr * p.x + cr * p.y;
+  const z0 = p.z;
+
   // yaw around y: (x,z)
-  const x1 = cy * p.x + sy * p.z;
-  const z1 = -sy * p.x + cy * p.z;
-  const y1 = p.y;
+  const x1 = cy * x0 + sy * z0;
+  const z1 = -sy * x0 + cy * z0;
+  const y1 = y0;
 
   // pitch around x: (y,z)
   const y2 = cx * y1 - sx * z1;
@@ -35,10 +43,13 @@ export function rotateToView(view, p) {
  * @returns {Vec3}
  */
 export function rotateFromView(view, p) {
+  const roll = Number.isFinite(view.roll) ? view.roll : 0;
   const cy = Math.cos(-view.yaw);
   const sy = Math.sin(-view.yaw);
   const cx = Math.cos(-view.pitch);
   const sx = Math.sin(-view.pitch);
+  const cr = Math.cos(-roll);
+  const sr = Math.sin(-roll);
 
   // inverse pitch around x
   const y1 = cx * p.y - sx * p.z;
@@ -48,8 +59,13 @@ export function rotateFromView(view, p) {
   // inverse yaw around y
   const x2 = cy * x1 + sy * z1;
   const z2 = -sy * x1 + cy * z1;
+  const y2 = y1;
 
-  return { x: x2, y: y1, z: z2 };
+  // inverse roll around z
+  const x3 = cr * x2 - sr * y2;
+  const y3 = sr * x2 + cr * y2;
+
+  return { x: x3, y: y3, z: z2 };
 }
 
 /**
@@ -60,6 +76,23 @@ export function rotateFromView(view, p) {
 export function rotateByDrag(view, dxPx, dyPx) {
   const speed = 0.0065;
   view.yaw += dxPx * speed;
+  view.pitch += dyPx * speed;
+  view.pitch = clamp(view.pitch, -Math.PI / 2 + 1e-3, Math.PI / 2 - 1e-3);
+}
+
+/**
+ * Hyperboloid drag:
+ * - vertical drag tilts (pitch)
+ * - horizontal drag spins around the model axis (roll)
+ *
+ * @param {SphereView} view
+ * @param {number} dxPx
+ * @param {number} dyPx
+ */
+export function rotateHyperboloidByDrag(view, dxPx, dyPx) {
+  const speed = 0.0065;
+  const roll = Number.isFinite(view.roll) ? view.roll : 0;
+  view.roll = wrapAngle(roll + dxPx * speed);
   view.pitch += dyPx * speed;
   view.pitch = clamp(view.pitch, -Math.PI / 2 + 1e-3, Math.PI / 2 - 1e-3);
 }
@@ -98,3 +131,10 @@ export function screenToSpherePoint(view, screen, vp) {
   return rotateFromView(view, inView);
 }
 
+/** @param {number} angle */
+function wrapAngle(angle) {
+  if (!Number.isFinite(angle)) return 0;
+  let x = (angle + Math.PI) % (Math.PI * 2);
+  if (x < 0) x += Math.PI * 2;
+  return x - Math.PI;
+}

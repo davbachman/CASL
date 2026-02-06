@@ -1,4 +1,4 @@
-import { createApp } from "./app.js?v=20260206-40";
+import { createApp } from "./app.js?v=20260206-64";
 
 const deps = {
   canvas: /** @type {HTMLCanvasElement} */ (document.getElementById("canvas")),
@@ -29,6 +29,8 @@ const deps = {
 const app = createApp(deps);
 
 const menuDropdowns = Array.from(document.querySelectorAll(".menu-dropdown"));
+const menuSubmenus = Array.from(document.querySelectorAll(".menu-submenu"));
+const menuSubmenuParents = Array.from(document.querySelectorAll(".menu-item-parent"));
 const menuItems = Array.from(document.querySelectorAll("[data-action]"));
 const modelItems = Array.from(document.querySelectorAll('[data-action="set-model"]'));
 const showHistoryMenuItem = /** @type {HTMLButtonElement | null} */ (
@@ -46,6 +48,7 @@ const hideStepsMenuItem = /** @type {HTMLButtonElement | null} */ (
 
 function closeAllMenus() {
   for (const menu of menuDropdowns) menu.open = false;
+  for (const submenu of menuSubmenus) submenu.classList.remove("is-open");
 }
 
 function setModelSelectionUI() {
@@ -71,6 +74,47 @@ function setViewMenuState() {
   if (hideStepsMenuItem) hideStepsMenuItem.disabled = !showingSteps;
 }
 
+/**
+ * @param {HTMLElement} item
+ */
+async function runMenuAction(item) {
+  const action = item.dataset.action;
+  if (!action) return;
+
+  if (action === "save-construction") {
+    try {
+      await app.saveConstruction();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unable to save construction.";
+      window.alert(`Save construction failed: ${msg}`);
+    }
+  }
+  if (action === "import-construction") app.importConstruction();
+  if (action === "save-tools") {
+    try {
+      await app.saveTools();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unable to save tools.";
+      window.alert(`Save tools failed: ${msg}`);
+    }
+  }
+  if (action === "import-tools") app.importTools();
+  if (action === "undo") app.undo();
+  if (action === "clear") app.clear();
+  if (action === "show-history") app.setHistoryOpen(true);
+  if (action === "hide-history") app.setHistoryOpen(false);
+  if (action === "show-steps") app.setShowSteps(true);
+  if (action === "hide-steps") app.setShowSteps(false);
+  if (action === "set-model") {
+    const geom = item.dataset.geometry;
+    if (geom) app.setGeometry(geom);
+  }
+
+  setModelSelectionUI();
+  setViewMenuState();
+  closeAllMenus();
+}
+
 document.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof Node)) return;
@@ -86,43 +130,34 @@ document.addEventListener("keydown", (event) => {
 for (const item of menuItems) {
   if (!(item instanceof HTMLElement)) continue;
   item.addEventListener("click", async () => {
-    const action = item.dataset.action;
-    if (!action) return;
+    await runMenuAction(item);
+  });
+}
 
-    if (action === "save-construction") {
-      try {
-        await app.saveConstruction();
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Unable to save construction.";
-        window.alert(`Save construction failed: ${msg}`);
-      }
-    }
-    if (action === "import-construction") app.importConstruction();
-    if (action === "save-tools") {
-      try {
-        await app.saveTools();
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Unable to save tools.";
-        window.alert(`Save tools failed: ${msg}`);
-      }
-    }
-    if (action === "import-tools") app.importTools();
-    if (action === "undo") app.undo();
-    if (action === "clear") app.clear();
-    if (action === "show-history") app.setHistoryOpen(true);
-    if (action === "hide-history") app.setHistoryOpen(false);
-    if (action === "show-steps") app.setShowSteps(true);
-    if (action === "hide-steps") app.setShowSteps(false);
-    if (action === "set-model") {
-      const geom = item.dataset.geometry;
-      if (geom && deps.geometrySelect.value !== geom) {
-        app.setGeometry(geom);
-      }
-    }
+for (const item of modelItems) {
+  if (!(item instanceof HTMLElement)) continue;
+  item.addEventListener("pointerup", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void runMenuAction(item);
+  });
+}
 
-    setModelSelectionUI();
-    setViewMenuState();
-    closeAllMenus();
+for (const parentBtn of menuSubmenuParents) {
+  if (!(parentBtn instanceof HTMLElement)) continue;
+  parentBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const host = parentBtn.closest(".menu-submenu");
+    if (!(host instanceof HTMLElement)) return;
+    const shouldOpen = !host.classList.contains("is-open");
+    const panel = host.parentElement;
+    if (panel) {
+      for (const sibling of panel.querySelectorAll(".menu-submenu.is-open")) {
+        if (sibling !== host) sibling.classList.remove("is-open");
+      }
+    }
+    host.classList.toggle("is-open", shouldOpen);
   });
 }
 

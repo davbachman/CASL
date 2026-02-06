@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Compass &amp; Straightedge Lab</title>
-    <link rel="stylesheet" href="./styles.css?v=20260206-34" />
+    <link rel="stylesheet" href="./styles.css?v=20260206-37" />
   </head>
   <body>
     <div id="app">
@@ -21,19 +21,69 @@
             </div>
           </details>
           <details class="menu-dropdown">
-            <summary class="menu-top-btn">Model</summary>
+            <summary class="menu-top-btn">Geometry</summary>
             <div class="menu-panel" role="menu">
-              <button class="menu-item" type="button" data-action="set-model" data-geometry="euclidean">Euclidean</button>
-              <button class="menu-item" type="button" data-action="set-model" data-geometry="inversive_euclidean">
-                Inversive Euclidean
-              </button>
-              <button class="menu-item" type="button" data-action="set-model" data-geometry="spherical">Spherical</button>
-              <button class="menu-item" type="button" data-action="set-model" data-geometry="hyperbolic_poincare">
-                Hyperbolic (Poincar&eacute; disk)
-              </button>
-              <button class="menu-item" type="button" data-action="set-model" data-geometry="hyperbolic_half_plane">
-                Hyperbolic (Half-plane)
-              </button>
+              <div class="menu-submenu">
+                <button class="menu-item menu-item-parent" type="button">Euclidean</button>
+                <div class="menu-subpanel" role="menu">
+                  <button class="menu-item menu-subitem" type="button" data-action="set-model" data-geometry="euclidean">
+                    Standard
+                  </button>
+                  <button
+                    class="menu-item menu-subitem"
+                    type="button"
+                    data-action="set-model"
+                    data-geometry="inversive_euclidean"
+                  >
+                    Inversive
+                  </button>
+                </div>
+              </div>
+              <div class="menu-submenu">
+                <button class="menu-item menu-item-parent" type="button">Spherical</button>
+                <div class="menu-subpanel" role="menu">
+                  <button class="menu-item menu-subitem" type="button" data-action="set-model" data-geometry="spherical">
+                    Standard
+                  </button>
+                </div>
+              </div>
+              <div class="menu-submenu">
+                <button class="menu-item menu-item-parent" type="button">Hyperbolic</button>
+                <div class="menu-subpanel" role="menu">
+                  <button
+                    class="menu-item menu-subitem"
+                    type="button"
+                    data-action="set-model"
+                    data-geometry="hyperbolic_poincare"
+                  >
+                    Poincare Disk
+                  </button>
+                  <button
+                    class="menu-item menu-subitem"
+                    type="button"
+                    data-action="set-model"
+                    data-geometry="hyperbolic_half_plane"
+                  >
+                    Half Plane
+                  </button>
+                  <button
+                    class="menu-item menu-subitem"
+                    type="button"
+                    data-action="set-model"
+                    data-geometry="hyperbolic_klein"
+                  >
+                    Klein
+                  </button>
+                  <button
+                    class="menu-item menu-subitem"
+                    type="button"
+                    data-action="set-model"
+                    data-geometry="hyperbolic_hyperboloid"
+                  >
+                    Hyperboloid
+                  </button>
+                </div>
+              </div>
             </div>
           </details>
           <details class="menu-dropdown">
@@ -63,6 +113,8 @@
             <option value="spherical">Spherical</option>
             <option value="hyperbolic_poincare">Hyperbolic (Poincar&eacute; disk)</option>
             <option value="hyperbolic_half_plane">Hyperbolic (Half-plane)</option>
+            <option value="hyperbolic_klein">Hyperbolic (Klein)</option>
+            <option value="hyperbolic_hyperboloid">Hyperbolic (Hyperboloid)</option>
           </select>
           <button id="undoBtn" class="menu-btn" type="button" disabled title="Undo (Ctrl/Cmd+Z)">Undo</button>
           <button id="clearBtn" class="menu-btn" type="button" title="Clear construction">Clear</button>
@@ -92,7 +144,7 @@
             <div class="hint-title">Controls</div>
             <ul class="hint-list">
               <li>Drag point: move</li>
-              <li>Drag background: pan / rotate sphere</li>
+              <li>Drag background: pan / rotate 3D models</li>
               <li>Wheel: zoom</li>
               <li>Right-click: style &amp; label</li>
             </ul>
@@ -123,6 +175,6 @@
       accept="application/json,.json"
     />
 
-    <script type="module" src="./src/main.js?v=20260206-40"></script>
+    <script type="module" src="./src/main.js?v=20260206-64"></script>
   </body>
 </html>

@@ -8,6 +8,8 @@ export const GeometryType = /** @type {const} */ ({
   SPHERICAL: "spherical",
   HYPERBOLIC_POINCARE: "hyperbolic_poincare",
   HYPERBOLIC_HALF_PLANE: "hyperbolic_half_plane",
+  HYPERBOLIC_KLEIN: "hyperbolic_klein",
+  HYPERBOLIC_HYPERBOLOID: "hyperbolic_hyperboloid",
 });
 
 export const ToolType = /** @type {const} */ ({
@@ -124,7 +126,8 @@ export const ToolType = /** @type {const} */ ({
  *  kind: "sphere",
  *  yaw: number,
  *  pitch: number,
- *  zoom: number
+ *  zoom: number,
+ *  roll?: number
  * }} ViewState
  */
 
@@ -202,9 +205,12 @@ export function createEmptyDoc(geom) {
 
 /** @param {GeometryType} geom */
 export function createDefaultView(geom) {
-  if (geom === GeometryType.SPHERICAL) {
+  if (geom === GeometryType.SPHERICAL || geom === GeometryType.HYPERBOLIC_HYPERBOLOID) {
     /** @type {ViewState} */
-    const v = { kind: "sphere", yaw: 0.6, pitch: -0.25, zoom: 1 };
+    const v =
+      geom === GeometryType.SPHERICAL
+        ? { kind: "sphere", yaw: 0.6, pitch: -0.25, zoom: 1, roll: 0 }
+        : { kind: "sphere", yaw: 0, pitch: -0.2, zoom: 1, roll: 0 };
     return v;
   }
   const baseScale =
@@ -212,6 +218,8 @@ export function createDefaultView(geom) {
       ? 260
       : geom === GeometryType.HYPERBOLIC_HALF_PLANE
         ? 120
+        : geom === GeometryType.HYPERBOLIC_KLEIN
+          ? 260
         : 90;
   /** @type {ViewState} */
   const v = { kind: "2d", scale: baseScale, offsetX: 0, offsetY: 0 };

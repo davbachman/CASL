@@ -15,11 +15,38 @@ Original prompt: OK, let's add some I/O. When you open up the history pane, ther
 - Exposed `createApp` command API and routed menubar actions through it to avoid user-activation loss for dialog APIs.
 - Added legacy Chromium save-dialog support (`chooseFileSystemEntries`) and improved blocked-permission detection for native save dialogs.
 - Added Safari-specific save helper window fallback with explicit "Download Linked File As..." instructions and copy-JSON option.
+- Reworked `Geometry` menu into grouped hover submenus: Euclidean (Standard/Inversive), Spherical (Standard), Hyperbolic (Poincare Disk/Half Plane).
+- Added backend model-switch conversion for equivalent geometry families:
+  - Euclidean ↔ Inversive via unit-circle inversion centered at `∞`
+  - Hyperbolic Poincare ↔ Half-plane via Cayley transform in real coordinates
+- Added converted-doc sanitization (constraints/history cleanup) and auto-fit of 2D view after cross-model conversion.
+- Added two hyperbolic model options in Geometry menu: `Klein` and `Hyperboloid` (and corresponding hidden select options).
+- Added new hyperbolic conversion helpers (`src/engine/hyperbolicModels.js`) for:
+  - Poincare ↔ Half-plane (Cayley)
+  - Poincare ↔ Klein
+  - Poincare ↔ Hyperboloid
+- Reworked hyperbolic model-switch conversion so all hyperbolic models convert through an internal Poincare chart; constructions now persist across:
+  - Poincare, Half-plane, Klein, Hyperboloid
+- Added shared hyperbolic curve sampling helpers (`src/engine/hyperbolicCurves.js`) for robust rendering/hit-testing.
+- Added hyperboloid projection/inverse helpers (`src/engine/hyperboloidView.js`) to support 3D hyperboloid display and interaction.
+- Updated renderer:
+  - Klein model now renders geodesics as straight chords in the disk.
+  - Klein circles render as sampled non-round curves (from mapped Poincare circles).
+  - Hyperboloid model renders as a rotatable 3D surface with projected points/curves.
+- Updated input controller:
+  - Klein clicks/drags convert display coordinates to internal Poincare coordinates.
+  - Hyperboloid supports rotate/zoom and click/drag via inverse projection to internal Poincare coordinates.
+  - Curve hit-testing/snapping for Klein and Hyperboloid now use sampled screen-space distances.
+- Improved Geometry submenu usability by removing hover-gap dead zone between parent and child submenus and adding a hover bridge area in CSS.
 
 ## Notes
 - JavaScript runtime syntax check was not run because `node` is not available in the current environment.
+- Browser-level interaction testing is still required for Klein/Hyperboloid custom-tool edge cases.
 
 ## Next TODOs
 - Manually test import/export round-trip in browser with multiple geometries and custom tools.
 - Manually verify popup print flow in browsers with strict popup blocking settings.
 - Manually test menubar behavior (outside click close, Escape close, menu command routing).
+- Manually verify all hyperbolic model switches preserve constructions in both directions:
+  - Poincare ↔ Half-plane, Poincare ↔ Klein, Poincare ↔ Hyperboloid, and cross-pair routes.
+- Manually test custom tool application while in Klein and Hyperboloid models, especially intersection-heavy tools.

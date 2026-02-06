@@ -1,5 +1,6 @@
 import { GeometryType } from "./state.js";
 import { circleThrough3, halfPlaneGeodesic, lineThrough, poincareGeodesic } from "./geom2d.js";
+import { usesPoincareInternalChart } from "./hyperbolicModels.js";
 import { acosh, clamp, EPS, tanh } from "./util/math.js";
 import { cross3, dot3, len3, norm3 } from "./vec3.js";
 
@@ -74,6 +75,13 @@ export function constrain2DPoint(geom, p) {
       return { x: p.x * k, y: p.y * k };
     }
   }
+  if (geom === GeometryType.HYPERBOLIC_KLEIN || geom === GeometryType.HYPERBOLIC_HYPERBOLOID) {
+    const r = Math.hypot(p.x, p.y);
+    if (r >= 1) {
+      const k = (1 - 1e-6) / (r || 1);
+      return { x: p.x * k, y: p.y * k };
+    }
+  }
   if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) {
     if (p.y <= 0) return { x: p.x, y: 1e-6 };
   }
@@ -112,7 +120,7 @@ export function derive2DLineCurve(geom, doc, line) {
     return circle ?? lineThrough(a, b);
   }
 
-  if (geom === GeometryType.HYPERBOLIC_POINCARE) {
+  if (usesPoincareInternalChart(geom)) {
     return poincareGeodesic(a, b);
   }
 
@@ -185,7 +193,7 @@ export function derive2DCircleCurve(geom, doc, circle) {
     return { kind: "circle", cx: s.x + cxRel, cy: s.y + cyRel, r };
   }
 
-  if (geom === GeometryType.HYPERBOLIC_POINCARE) {
+  if (usesPoincareInternalChart(geom)) {
     const rho = poincareDistance(c, q);
     const s = tanh(rho / 2);
     const pNormSq = c.x * c.x + c.y * c.y;
@@ -220,7 +228,7 @@ export function derive2DCircleCurve(geom, doc, circle) {
  * @param {Vec2} p
  */
 export function is2DPointInDomain(geom, p) {
-  if (geom === GeometryType.HYPERBOLIC_POINCARE) return p.x * p.x + p.y * p.y < 1 - 1e-9;
+  if (usesPoincareInternalChart(geom)) return p.x * p.x + p.y * p.y < 1 - 1e-9;
   if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) return p.y > 1e-9;
   return true;
 }

@@ -1,9 +1,14 @@
 import { GeometryType } from "./state.js";
 import { derive2DCircleCurve, derive2DLineCurve, deriveSphereCircle, deriveSphereGreatCircle } from "./geometry.js";
-import { intersectCurves } from "./geom2d.js";
+import { intersectCurves, lineThrough } from "./geom2d.js";
+import { samplePoincareCirclePoints, samplePoincareGeodesicPoints } from "./hyperbolicCurves.js";
+import { hyperbolicInternalToDisplay2D, hyperboloidToPoincare, poincareToHyperboloid, poincareToKlein } from "./hyperbolicModels.js";
+import { hyperboloidViewport } from "./hyperboloidView.js?v=20260206-64";
 import { initialize2DViewIfNeeded, worldToScreen } from "./view2d.js";
-import { projectSphere, rotateToView } from "./sphereView.js";
+import { projectSphere, rotateFromView, rotateToView } from "./sphereView.js";
 import { norm3 } from "./vec3.js";
+
+const HYPERBOLOID_SURFACE_RADIUS = 0.92;
 
 /**
  * @typedef {import("./state.js").AppState} AppState
@@ -52,6 +57,8 @@ export function createRenderer(canvas, state) {
 
     if (geom === GeometryType.SPHERICAL) {
       drawSphere(ctx, w, h, dpr, state, doc, /** @type {any} */ (view));
+    } else if (geom === GeometryType.HYPERBOLIC_HYPERBOLOID) {
+      drawHyperboloid(ctx, w, h, dpr, state, doc, /** @type {any} */ (view));
     } else {
       initialize2DViewIfNeeded(
         /** @type {any} */ (view),
@@ -64,7 +71,7 @@ export function createRenderer(canvas, state) {
 
     lastInfo = {
       text:
-        geom === GeometryType.SPHERICAL
+        geom === GeometryType.SPHERICAL || geom === GeometryType.HYPERBOLIC_HYPERBOLOID
           ? `mode=${geom} points=${doc.points.length} lines=${doc.lines.length} circles=${doc.circles.length}`
           : `mode=${geom} points=${doc.points.length} lines=${doc.lines.length} circles=${doc.circles.length} scale=${Math.round(
               /** @type {any} */ (view).scale,
@@ -94,7 +101,7 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, w / dpr, h / dpr);
 
-  if (geom === GeometryType.HYPERBOLIC_POINCARE) {
+  if (geom === GeometryType.HYPERBOLIC_POINCARE || geom === GeometryType.HYPERBOLIC_KLEIN) {
     const center = { x: view.offsetX, y: view.offsetY };
     const diskR = view.scale;
     // Shade outside disk.
@@ -193,7 +200,7 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
     const highlight =
       isToolRefSelected(state, "point", p.id) ||
       (state.pending?.tool !== "intersect" && state.pending?.firstPointId === p.id);
-    draw2DPoint(ctx, view, p, highlight);
+    draw2DPoint(ctx, view, geom, p, highlight);
   }
 
   ctx.restore();
@@ -216,6 +223,20 @@ function draw2DCircleObject(ctx, view, geom, curve, style, label, isSelected, cs
   ctx.globalAlpha = style.opacity;
   ctx.strokeStyle = style.color;
   ctx.lineWidth = isSelected ? 3 : 2;
+
+  if (geom === GeometryType.HYPERBOLIC_KLEIN) {
+    const points =
+      curve.kind === "line" ? samplePoincareGeodesicPoints(curve, 120) : samplePoincareCirclePoints(curve, 240);
+    const display = points.map((p) => hyperbolicInternalToDisplay2D(geom, p));
+    drawPolylineWorld(ctx, view, display);
+    const labWorld = labelAnchorWorld ? hyperbolicInternalToDisplay2D(geom, labelAnchorWorld) : display[Math.floor(display.length / 2)];
+    if (labWorld) {
+      const lab = worldToScreen(view, labWorld);
+      drawCurveLabel(ctx, label, lab.x, lab.y);
+    }
+    ctx.restore();
+    return;
+  }
 
   if (curve.kind === "line") {
     const seg = clipLineToView(curve, view, cssW, cssH);
@@ -279,6 +300,36 @@ function draw2DLineObject(
   ctx.globalAlpha = style.opacity;
   ctx.strokeStyle = style.color;
   ctx.lineWidth = isSelected ? 3 : 2;
+
+  if (geom === GeometryType.HYPERBOLIC_KLEIN) {
+    const seg = kleinGeodesicSegment(curve, definingPointsWorld);
+    /** @type {Array<{x:number,y:number}>} */
+    const displayPoints = [];
+    if (seg) {
+      const steps = 140;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        displayPoints.push({
+          x: seg.a.x + (seg.b.x - seg.a.x) * t,
+          y: seg.a.y + (seg.b.y - seg.a.y) * t,
+        });
+      }
+    } else {
+      const fallback = samplePoincareGeodesicPoints(curve, 140).map((p) => hyperbolicInternalToDisplay2D(geom, p));
+      displayPoints.push(...fallback);
+    }
+    drawPolylineWorld(ctx, view, displayPoints);
+    const labWorld =
+      labelAnchorWorld && Number.isFinite(labelAnchorWorld.x) && Number.isFinite(labelAnchorWorld.y)
+        ? hyperbolicInternalToDisplay2D(geom, labelAnchorWorld)
+        : displayPoints[Math.floor(displayPoints.length / 2)];
+    if (labWorld) {
+      const lab = worldToScreen(view, labWorld);
+      drawCurveLabel(ctx, label, lab.x, lab.y);
+    }
+    ctx.restore();
+    return;
+  }
 
   // Lines/geodesics
   if (geom === GeometryType.HYPERBOLIC_POINCARE) {
@@ -360,11 +411,13 @@ function draw2DLineObject(
 /**
  * @param {CanvasRenderingContext2D} ctx
  * @param {any} view
+ * @param {GeometryType} geom
  * @param {{id:string,label:string,x:number,y:number,z?:number,style:{color:string,opacity:number},locked?:boolean}} p
  * @param {boolean} highlight
  */
-function draw2DPoint(ctx, view, p, highlight) {
-  const s = worldToScreen(view, { x: p.x, y: p.y });
+function draw2DPoint(ctx, view, geom, p, highlight) {
+  const drawPos = geom === GeometryType.HYPERBOLIC_KLEIN ? poincareToKlein({ x: p.x, y: p.y }) : { x: p.x, y: p.y };
+  const s = worldToScreen(view, drawPos);
   ctx.save();
   ctx.globalAlpha = p.style.opacity;
   ctx.fillStyle = p.style.color;
@@ -407,6 +460,22 @@ function drawCurveLabel(ctx, label, x, y) {
   ctx.fillStyle = "rgba(0,0,0,0.7)";
   ctx.fillText(label, x + 8, y - 6);
   ctx.restore();
+}
+
+/**
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {any} view
+ * @param {Array<{x:number,y:number}>} pts
+ */
+function drawPolylineWorld(ctx, view, pts) {
+  if (!pts || pts.length < 2) return;
+  ctx.beginPath();
+  for (let i = 0; i < pts.length; i++) {
+    const s = worldToScreen(view, pts[i]);
+    if (i === 0) ctx.moveTo(s.x, s.y);
+    else ctx.lineTo(s.x, s.y);
+  }
+  ctx.stroke();
 }
 
 /**
@@ -571,6 +640,40 @@ function clipLineToUnitDisk(line) {
 }
 
 /**
+ * Compute the straight Klein geodesic chord for a hyperbolic line.
+ *
+ * @param {import("./geom2d.js").Curve2D} curve
+ * @param {{p1:{x:number,y:number}, p2:{x:number,y:number}} | null} definingPointsWorld
+ * @returns {{a:{x:number,y:number}, b:{x:number,y:number}} | null}
+ */
+function kleinGeodesicSegment(curve, definingPointsWorld) {
+  if (definingPointsWorld) {
+    const k1 = hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, definingPointsWorld.p1);
+    const k2 = hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, definingPointsWorld.p2);
+    const chord = lineThrough(k1, k2);
+    const seg = chord ? clipLineToUnitDisk(chord) : null;
+    if (seg) return seg;
+  }
+
+  if (curve.kind === "line") {
+    const seg = clipLineToUnitDisk(curve);
+    if (!seg) return null;
+    return {
+      a: hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, seg.a),
+      b: hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, seg.b),
+    };
+  }
+
+  const boundary = { kind: "circle", cx: 0, cy: 0, r: 1 };
+  const hits = intersectCurves(curve, boundary);
+  if (hits.length < 2) return null;
+  return {
+    a: hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, hits[0]),
+    b: hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, hits[1]),
+  };
+}
+
+/**
  * Clip line to current view rectangle in world coords.
  * @param {{kind:"line", a:number,b:number,c:number}} line
  * @param {any} view
@@ -703,6 +806,365 @@ function drawSphere(ctx, w, h, dpr, state, doc, view) {
 
 /**
  * @param {CanvasRenderingContext2D} ctx
+ * @param {number} w
+ * @param {number} h
+ * @param {number} dpr
+ * @param {AppState} state
+ * @param {any} doc
+ * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
+ */
+function drawHyperboloid(ctx, w, h, dpr, state, doc, view) {
+  ctx.save();
+  ctx.scale(dpr, dpr);
+
+  const cssW = w / dpr;
+  const cssH = h / dpr;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  const vp = hyperboloidViewport(view, cssW, cssH);
+  drawHyperboloidSurface(ctx, view, vp);
+
+  for (const circle of doc.circles) {
+    if (circle.hidden) continue;
+    const curve = derive2DCircleCurve(GeometryType.HYPERBOLIC_HYPERBOLOID, doc, circle);
+    if (!curve) continue;
+    const pts =
+      curve.kind === "line" ? samplePoincareGeodesicPoints(curve, 160) : samplePoincareCirclePoints(curve, 220);
+    const isSelected =
+      isToolRefSelected(state, "circle", circle.id) ||
+      (state.pending?.tool === "intersect" &&
+        state.pending.firstObject.kind === "circle" &&
+        state.pending.firstObject.id === circle.id);
+    drawHyperboloidCurve(ctx, view, vp, pts, circle.style, circle.label, isSelected);
+  }
+
+  for (const line of doc.lines) {
+    if (line.hidden) continue;
+    const curve = derive2DLineCurve(GeometryType.HYPERBOLIC_HYPERBOLOID, doc, line);
+    if (!curve) continue;
+    const pts = samplePoincareGeodesicPoints(curve, 180);
+    const isSelected =
+      isToolRefSelected(state, "line", line.id) ||
+      (state.pending?.tool === "intersect" &&
+        state.pending.firstObject.kind === "line" &&
+        state.pending.firstObject.id === line.id);
+    drawHyperboloidCurve(ctx, view, vp, pts, line.style, line.label, isSelected);
+  }
+
+  for (const p of doc.points) {
+    if (p.hidden) continue;
+    const highlight =
+      isToolRefSelected(state, "point", p.id) ||
+      (state.pending?.tool !== "intersect" && state.pending?.firstPointId === p.id);
+    const s = projectHyperboloidVertex(view, vp, { x: p.x, y: p.y });
+    if (!s) continue;
+    ctx.save();
+    ctx.globalAlpha = s.frontFacing ? p.style.opacity : p.style.opacity * 0.3;
+    ctx.fillStyle = p.style.color;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 4.2, 0, Math.PI * 2);
+    ctx.fill();
+    if (highlight) {
+      ctx.strokeStyle = "rgba(37,99,235,0.9)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 9.2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+    ctx.fillStyle = "rgba(0,0,0,0.8)";
+    ctx.globalAlpha = 1;
+    ctx.fillText(p.label, s.x + 8, s.y - 8);
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+/**
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
+ * @param {{cx:number, cy:number, scale:number, cameraZ:number}} vp
+ */
+function drawHyperboloidSurface(ctx, view, vp) {
+  const radius = HYPERBOLOID_SURFACE_RADIUS;
+  const radialSteps = 54;
+  const angularSteps = 180;
+  const vertexRows = radialSteps + 1;
+
+  /** @type {Array<Array<{x:number,y:number,vx:number,vy:number,vz:number,nx:number,ny:number,nz:number}>>} */
+  const grid = [];
+  for (let i = 0; i < vertexRows; i++) {
+    const u = i / radialSteps;
+    const r = radius * Math.sqrt(u);
+    /** @type {Array<{x:number,y:number,vx:number,vy:number,vz:number,nx:number,ny:number,nz:number}>} */
+    const row = [];
+    for (let j = 0; j < angularSteps; j++) {
+      const t = (j / angularSteps) * Math.PI * 2;
+      const p = { x: r * Math.cos(t), y: r * Math.sin(t) };
+      const h = poincareToHyperboloid(p);
+      const v = rotateToView(view, h);
+      const den = vp.cameraZ - v.z;
+      if (den <= 1e-5) return { rim: [] };
+      const k = vp.scale / den;
+      const normalWorld = norm3({ x: -h.x, y: -h.y, z: h.z });
+      const normalView = rotateToView(view, normalWorld);
+      row.push({
+        x: vp.cx + v.x * k,
+        y: vp.cy - v.y * k,
+        vx: v.x,
+        vy: v.y,
+        vz: v.z,
+        nx: normalView.x,
+        ny: normalView.y,
+        nz: normalView.z,
+      });
+    }
+    grid.push(row);
+  }
+
+  /** @type {Array<{a:any,b:any,c:any,depth:number,shade:number,outside:boolean}>} */
+  const tris = [];
+  const light = norm3({ x: -0.35, y: 0.45, z: 0.82 });
+
+  /** @param {{x:number,y:number,vx:number,vy:number,vz:number,nx:number,ny:number,nz:number}} a
+   *  @param {{x:number,y:number,vx:number,vy:number,vz:number,nx:number,ny:number,nz:number}} b
+   *  @param {{x:number,y:number,vx:number,vy:number,vz:number,nx:number,ny:number,nz:number}} c
+   */
+  const pushTri = (a, b, c) => {
+    const cx = (a.vx + b.vx + c.vx) / 3;
+    const cy = (a.vy + b.vy + c.vy) / 3;
+    const cz = (a.vz + b.vz + c.vz) / 3;
+    const normalRaw = norm3({
+      x: (a.nx + b.nx + c.nx) / 3,
+      y: (a.ny + b.ny + c.ny) / 3,
+      z: (a.nz + b.nz + c.nz) / 3,
+    });
+    const toCam = { x: -cx, y: -cy, z: vp.cameraZ - cz };
+    const facing = normalRaw.x * toCam.x + normalRaw.y * toCam.y + normalRaw.z * toCam.z;
+    const outside = facing >= 0;
+    const normal = outside ? normalRaw : { x: -normalRaw.x, y: -normalRaw.y, z: -normalRaw.z };
+    const lit = Math.max(0, normal.x * light.x + normal.y * light.y + normal.z * light.z);
+    const shade = 0.28 + 0.72 * lit;
+    tris.push({ a, b, c, depth: cz, shade, outside });
+  };
+
+  for (let i = 0; i < radialSteps; i++) {
+    const r0 = grid[i];
+    const r1 = grid[i + 1];
+    for (let j = 0; j < angularSteps; j++) {
+      const j1 = (j + 1) % angularSteps;
+      const a = r0[j];
+      const b = r1[j];
+      const c = r1[j1];
+      const d = r0[j1];
+      pushTri(a, b, c);
+      pushTri(a, c, d);
+    }
+  }
+
+  tris.sort((m, n) => m.depth - n.depth);
+  for (const tri of tris) {
+    const r = tri.outside
+      ? Math.round(170 + (230 - 170) * tri.shade)
+      : Math.round(210 + (255 - 210) * tri.shade);
+    const g = tri.outside
+      ? Math.round(184 + (238 - 184) * tri.shade)
+      : Math.round(220 + (255 - 220) * tri.shade);
+    const b = tri.outside
+      ? Math.round(205 + (248 - 205) * tri.shade)
+      : Math.round(234 + (255 - 234) * tri.shade);
+    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+    ctx.beginPath();
+    ctx.moveTo(tri.a.x, tri.a.y);
+    ctx.lineTo(tri.b.x, tri.b.y);
+    ctx.lineTo(tri.c.x, tri.c.y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  const rim = grid[radialSteps].map((v) => ({ x: v.x, y: v.y }));
+  if (rim.length >= 3) drawHyperboloidRim(ctx, rim);
+  return { rim };
+}
+
+/**
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
+ * @param {{cx:number, cy:number, scale:number, cameraZ:number}} vp
+ * @param {Array<{x:number,y:number}>} points
+ * @param {{color:string,opacity:number}} style
+ * @param {string} label
+ * @param {boolean} isSelected
+ */
+function drawHyperboloidCurve(ctx, view, vp, points, style, label, isSelected) {
+  ctx.save();
+  ctx.strokeStyle = style.color;
+  ctx.lineWidth = isSelected ? 3 : 2;
+  const maxR2 = HYPERBOLOID_SURFACE_RADIUS * HYPERBOLOID_SURFACE_RADIUS + 1e-9;
+
+  /** @type {Array<{x:number,y:number,depth:number,normal:{x:number,y:number,z:number},frontFacing:boolean} | null>} */
+  const screenPts = [];
+  /** @type {boolean[]} */
+  const frontMask = [];
+  for (const p of points) {
+    if (p.x * p.x + p.y * p.y > maxR2) {
+      screenPts.push(null);
+      frontMask.push(false);
+      continue;
+    }
+    const s = projectHyperboloidVertex(view, vp, p);
+    if (!s) {
+      screenPts.push(null);
+      frontMask.push(false);
+      continue;
+    }
+    screenPts.push(s);
+    frontMask.push(s.frontFacing);
+  }
+
+  ctx.setLineDash([6, 6]);
+  ctx.globalAlpha = style.opacity * 0.25;
+  drawPolylineMasked(ctx, screenPts, frontMask, false);
+
+  ctx.setLineDash([]);
+  ctx.globalAlpha = style.opacity;
+  drawPolylineMasked(ctx, screenPts, frontMask, true);
+
+  /** @type {Array<{x:number,y:number,depth:number,normal:{x:number,y:number,z:number},frontFacing:boolean}>} */
+  const visiblePts = [];
+  /** @type {Array<{x:number,y:number,depth:number,normal:{x:number,y:number,z:number},frontFacing:boolean}>} */
+  const frontPts = [];
+  for (const p of screenPts) {
+    if (!p) continue;
+    visiblePts.push(p);
+    if (p.frontFacing) frontPts.push(p);
+  }
+
+  if (visiblePts.length > 0) {
+    const labelSource = frontPts.length > 0 ? frontPts : visiblePts;
+    const mid = labelSource[Math.floor(labelSource.length / 2)];
+    drawCurveLabel(ctx, label, mid.x, mid.y);
+  }
+  ctx.restore();
+}
+
+/**
+ * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
+ * @param {{cx:number, cy:number, scale:number, cameraZ:number}} vp
+ * @param {number} radius
+ * @param {number} steps
+ */
+function collectHyperboloidRim(view, vp, radius, steps) {
+  /** @type {Array<{x:number,y:number}>} */
+  const pts = [];
+  for (let i = 0; i < steps; i++) {
+    const t = (i / steps) * Math.PI * 2;
+    const s = projectHyperboloidVertex(view, vp, { x: radius * Math.cos(t), y: radius * Math.sin(t) });
+    if (!s) return [];
+    pts.push({ x: s.x, y: s.y });
+  }
+  return pts;
+}
+
+/**
+ * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
+ * @param {{cx:number, cy:number, scale:number, cameraZ:number}} vp
+ * @param {{x:number,y:number}} p
+ */
+function projectHyperboloidVertex(view, vp, p) {
+  const h = poincareToHyperboloid(p);
+  const v = rotateToView(view, h);
+  const den = vp.cameraZ - v.z;
+  if (den <= 1e-5) return null;
+  const k = vp.scale / den;
+  const normalWorld = norm3({ x: -h.x, y: -h.y, z: h.z });
+  const normalView = rotateToView(view, normalWorld);
+  const hidden = isHyperboloidPointHidden(view, vp, h);
+  return {
+    x: vp.cx + v.x * k,
+    y: vp.cy - v.y * k,
+    depth: v.z,
+    normal: normalView,
+    frontFacing: !hidden,
+  };
+}
+
+/**
+ * Whether a surface point is occluded by another point on the hyperboloid along
+ * the camera ray before reaching that point.
+ *
+ * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
+ * @param {{cameraZ:number}} vp
+ * @param {{x:number,y:number,z:number}} h
+ */
+function isHyperboloidPointHidden(view, vp, h) {
+  const cameraView = { x: 0, y: 0, z: vp.cameraZ };
+  const cameraWorld = rotateFromView(view, cameraView);
+  const dir = { x: h.x - cameraWorld.x, y: h.y - cameraWorld.y, z: h.z - cameraWorld.z };
+
+  const a = minkowskiDot3(dir, dir);
+  const b = 2 * minkowskiDot3(cameraWorld, dir);
+  const c = minkowskiDot3(cameraWorld, cameraWorld) - 1;
+  if (Math.abs(a) < 1e-12) return false;
+  const disc = b * b - 4 * a * c;
+  if (disc <= 1e-12) return false;
+  const sd = Math.sqrt(Math.max(0, disc));
+  const t1 = (-b - sd) / (2 * a);
+  const t2 = (-b + sd) / (2 * a);
+  return hasEarlierIntersection(t1, cameraWorld, dir) || hasEarlierIntersection(t2, cameraWorld, dir);
+}
+
+/**
+ * @param {number} t
+ * @param {{x:number,y:number,z:number}} cameraWorld
+ * @param {{x:number,y:number,z:number}} dir
+ */
+function hasEarlierIntersection(t, cameraWorld, dir) {
+  if (!Number.isFinite(t)) return false;
+  if (t <= 1e-5 || t >= 1 - 1e-5) return false;
+  const q = {
+    x: cameraWorld.x + dir.x * t,
+    y: cameraWorld.y + dir.y * t,
+    z: cameraWorld.z + dir.z * t,
+  };
+  if (!(q.z > 0)) return false;
+  const p = hyperboloidToPoincare(q);
+  if (!p) return false;
+  const r2 = p.x * p.x + p.y * p.y;
+  return r2 <= HYPERBOLOID_SURFACE_RADIUS * HYPERBOLOID_SURFACE_RADIUS + 1e-9;
+}
+
+/** @param {{x:number,y:number,z:number}} a @param {{x:number,y:number,z:number}} b */
+function minkowskiDot3(a, b) {
+  return a.z * b.z - a.x * b.x - a.y * b.y;
+}
+
+/**
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {Array<{x:number,y:number}>} points
+ */
+function beginClosedPath(ctx, points) {
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+  ctx.closePath();
+}
+
+/**
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {Array<{x:number,y:number}>} rim
+ */
+function drawHyperboloidRim(ctx, rim) {
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.lineWidth = 1.5;
+  beginClosedPath(ctx, rim);
+  ctx.stroke();
+}
+
+/**
+ * @param {CanvasRenderingContext2D} ctx
  * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
  * @param {{cx:number, cy:number, r:number}} vp
  * @param {{normal:{x:number,y:number,z:number}, d:number}} plane
@@ -805,20 +1267,20 @@ function cross3Safe(a, b) {
 /**
  * Draw a polyline while masking to either front or back hemisphere segments.
  * @param {CanvasRenderingContext2D} ctx
- * @param {{x:number,y:number,z:number}[]} pts
+ * @param {Array<{x:number,y:number} | null>} pts
  * @param {boolean[]} frontMask
  * @param {boolean} wantFront
  */
 function drawPolylineMasked(ctx, pts, frontMask, wantFront) {
   let started = false;
   for (let i = 0; i < pts.length; i++) {
-    const ok = frontMask[i] === wantFront;
+    const p = pts[i];
+    const ok = !!p && frontMask[i] === wantFront;
     if (!ok) {
       if (started) ctx.stroke();
       started = false;
       continue;
     }
-    const p = pts[i];
     if (!started) {
       ctx.beginPath();
       ctx.moveTo(p.x, p.y);

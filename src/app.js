@@ -1,9 +1,15 @@
 import { GeometryType, ToolType, createDefaultView, createEmptyDoc, createInitialState } from "./engine/state.js";
 import { createHistory } from "./engine/history.js";
-import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260206-33";
+import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260206-64";
+import {
+  hyperbolicInternalToDisplay2D,
+  hyperbolicToPoincarePoint,
+  isHyperbolicGeometry,
+  poincareToHyperbolicPoint,
+} from "./engine/hyperbolicModels.js";
 import { installContextMenu } from "./ui/contextMenu.js";
-import { attachCanvasController } from "./engine/inputController.js?v=20260206-33";
-import { createRenderer } from "./engine/renderer.js";
+import { attachCanvasController } from "./engine/inputController.js?v=20260206-64";
+import { createRenderer } from "./engine/renderer.js?v=20260206-64";
 import { makeId } from "./engine/util/ids.js";
 
 /**
@@ -36,6 +42,9 @@ import { makeId } from "./engine/util/ids.js";
 export function createApp(deps) {
   const state = createInitialState();
   ensureInversiveInfinityPoint(state);
+  for (const geom of Object.values(GeometryType)) {
+    enforceHyperboloidAxis(state.views[geom], /** @type {GeometryType} */ (geom));
+  }
   const history = createHistory(state);
   const renderer = createRenderer(deps.canvas, state);
   let lastHistorySignature = "";
@@ -154,7 +163,17 @@ export function createApp(deps) {
   };
 
   const applyGeometryChange = (next) => {
+    const prev = state.activeGeometry;
+    if (prev !== next) {
+      const convertedDoc = convertDocForModelSwitch(prev, next, state.docs[prev], state.docs[next]);
+      if (convertedDoc) {
+        state.docs[next] = convertedDoc;
+        history.clear(next);
+        fit2DViewToDoc(deps.canvas, state.views[next], next, convertedDoc);
+      }
+    }
     state.activeGeometry = next;
+    enforceHyperboloidAxis(state.views[next], next);
     state.pending = null;
     state.selection = null;
     state.toolUse = null;
@@ -420,6 +439,7 @@ export function createApp(deps) {
   renderer.requestRender(true);
 
   const tick = () => {
+    enforceHyperboloidAxis(state.views[state.activeGeometry], state.activeGeometry);
     renderer.drawIfNeeded();
     renderer.getLastRenderInfo();
     renderHistoryIfNeeded();
@@ -912,13 +932,26 @@ function normalizeConstructionDoc(geom, rawDoc) {
 function normalizeViewState(geom, rawView) {
   const fallback = createDefaultView(geom);
   if (!rawView || typeof rawView !== "object") return fallback;
-  if (geom === GeometryType.SPHERICAL) {
+  if (geom === GeometryType.SPHERICAL || geom === GeometryType.HYPERBOLIC_HYPERBOLOID) {
     if (rawView.kind !== "sphere") return fallback;
-    const yaw = Number.isFinite(rawView.yaw) ? rawView.yaw : fallback.yaw;
+    const yaw =
+      geom === GeometryType.HYPERBOLIC_HYPERBOLOID
+        ? 0
+        : Number.isFinite(rawView.yaw)
+          ? rawView.yaw
+          : fallback.yaw;
     const pitch = Number.isFinite(rawView.pitch) ? rawView.pitch : fallback.pitch;
     const zoomRaw = Number.isFinite(rawView.zoom) ? rawView.zoom : fallback.zoom;
+    const roll =
+      Number.isFinite(rawView.roll)
+        ? rawView.roll
+        : geom === GeometryType.HYPERBOLIC_HYPERBOLOID && Number.isFinite(rawView.yaw)
+          ? rawView.yaw
+          : Number.isFinite(fallback.roll)
+            ? fallback.roll
+            : 0;
     const zoom = Math.min(4, Math.max(0.2, zoomRaw));
-    return { kind: "sphere", yaw, pitch, zoom };
+    return { kind: "sphere", yaw, pitch, zoom, roll };
   }
   if (rawView.kind !== "2d") return fallback;
   const scaleRaw = Number.isFinite(rawView.scale) ? rawView.scale : fallback.scale;
@@ -926,6 +959,19 @@ function normalizeViewState(geom, rawView) {
   const offsetX = Number.isFinite(rawView.offsetX) ? rawView.offsetX : fallback.offsetX;
   const offsetY = Number.isFinite(rawView.offsetY) ? rawView.offsetY : fallback.offsetY;
   return { kind: "2d", scale, offsetX, offsetY };
+}
+
+/**
+ * Keep hyperboloid axis vertical in screen space by locking yaw to 0.
+ *
+ * @param {import("./engine/state.js").ViewState} view
+ * @param {GeometryType} geom
+ */
+function enforceHyperboloidAxis(view, geom) {
+  if (geom !== GeometryType.HYPERBOLIC_HYPERBOLOID) return;
+  if (!view || view.kind !== "sphere") return;
+  view.yaw = 0;
+  if (!Number.isFinite(view.roll)) view.roll = 0;
 }
 
 /**
@@ -946,6 +992,345 @@ function normalizeImportedActiveTool(rawActiveTool, idMap, customTools) {
   return ToolType.LINE;
 }
 
+/**
+ * Convert docs when switching between equivalent models in the same geometry family.
+ *
+ * @param {GeometryType} from
+ * @param {GeometryType} to
+ * @param {import("./engine/state.js").ConstructionDoc} sourceDoc
+ * @param {import("./engine/state.js").ConstructionDoc} targetDoc
+ */
+function convertDocForModelSwitch(from, to, sourceDoc, targetDoc) {
+  if (from === to) return null;
+  if (!isCrossModelConvertible(from, to)) return null;
+
+  if (from === GeometryType.EUCLIDEAN && to === GeometryType.INVERSIVE_EUCLIDEAN) {
+    return convertEuclideanToInversiveDoc(sourceDoc, targetDoc);
+  }
+  if (from === GeometryType.INVERSIVE_EUCLIDEAN && to === GeometryType.EUCLIDEAN) {
+    return convertInversiveToEuclideanDoc(sourceDoc);
+  }
+  if (isHyperbolicGeometry(from) && isHyperbolicGeometry(to)) {
+    return convertHyperbolicDoc(sourceDoc, from, to);
+  }
+  return null;
+}
+
+/**
+ * @param {GeometryType} from
+ * @param {GeometryType} to
+ */
+function isCrossModelConvertible(from, to) {
+  const euclideanFamily =
+    (from === GeometryType.EUCLIDEAN || from === GeometryType.INVERSIVE_EUCLIDEAN) &&
+    (to === GeometryType.EUCLIDEAN || to === GeometryType.INVERSIVE_EUCLIDEAN);
+  const hyperbolicFamily = isHyperbolicGeometry(from) && isHyperbolicGeometry(to);
+  return euclideanFamily || hyperbolicFamily;
+}
+
+/**
+ * @param {import("./engine/state.js").ConstructionDoc} sourceDoc
+ * @param {import("./engine/state.js").ConstructionDoc} targetDoc
+ */
+function convertEuclideanToInversiveDoc(sourceDoc, targetDoc) {
+  const center = getInversiveCenter(targetDoc);
+  const converted = convertMapped2DDoc(sourceDoc, (p) => invertPointAtCenter(p, center));
+  const starId = makeId("p", converted.nextId++);
+  converted.starPointId = starId;
+  converted.points.push({
+    id: starId,
+    label: "∞",
+    x: center.x,
+    y: center.y,
+    locked: true,
+    style: { color: "#111111", opacity: 1 },
+  });
+  return converted;
+}
+
+/**
+ * @param {import("./engine/state.js").ConstructionDoc} sourceDoc
+ */
+function convertInversiveToEuclideanDoc(sourceDoc) {
+  const starId = sourceDoc.starPointId ?? null;
+  const center = getInversiveCenter(sourceDoc);
+  const out = safeClone(sourceDoc);
+  out.starPointId = undefined;
+  out.points = [];
+  out.lines = [];
+  out.circles = [];
+
+  /** @type {Map<string, string>} */
+  const pointIdMap = new Map();
+  for (const point of sourceDoc.points ?? []) {
+    if (starId && point.id === starId) continue;
+    const mapped = invertPointAtCenter({ x: point.x, y: point.y }, center);
+    if (!mapped) continue;
+    const nextPoint = { ...point, x: mapped.x, y: mapped.y };
+    delete nextPoint.z;
+    nextPoint.intersectionHints = undefined;
+    out.points.push(nextPoint);
+    pointIdMap.set(point.id, point.id);
+  }
+
+  let helperCenterPointId = null;
+  const ensureCenterHelperPoint = () => {
+    if (helperCenterPointId) return helperCenterPointId;
+    const helperId = makeId("p", out.nextId++);
+    out.points.push({
+      id: helperId,
+      label: "",
+      x: center.x,
+      y: center.y,
+      hidden: true,
+      style: { color: "#111111", opacity: 1 },
+    });
+    helperCenterPointId = helperId;
+    return helperCenterPointId;
+  };
+
+  for (const line of sourceDoc.lines ?? []) {
+    const p1Mapped = pointIdMap.get(line.p1);
+    const p2Mapped = pointIdMap.get(line.p2);
+    if (p1Mapped && p2Mapped) {
+      out.lines.push({ ...line, p1: p1Mapped, p2: p2Mapped });
+      continue;
+    }
+    if (starId && (line.p1 === starId || line.p2 === starId)) {
+      const other = line.p1 === starId ? p2Mapped : p1Mapped;
+      if (!other) continue;
+      const helper = ensureCenterHelperPoint();
+      out.lines.push({ ...line, p1: other, p2: helper });
+    }
+  }
+
+  for (const circle of sourceDoc.circles ?? []) {
+    const centerMapped = pointIdMap.get(circle.center);
+    const radiusMapped = pointIdMap.get(circle.radiusPoint);
+    if (centerMapped && radiusMapped) {
+      out.circles.push({ ...circle, center: centerMapped, radiusPoint: radiusMapped });
+      continue;
+    }
+    if (starId && circle.center === starId && radiusMapped) {
+      const helper = ensureCenterHelperPoint();
+      out.circles.push({ ...circle, center: helper, radiusPoint: radiusMapped });
+    }
+  }
+
+  return sanitizeConvertedDoc(out);
+}
+
+/**
+ * @param {import("./engine/state.js").ConstructionDoc} sourceDoc
+ * @param {(p:{x:number,y:number}) => {x:number,y:number} | null} mapPoint
+ */
+function convertMapped2DDoc(sourceDoc, mapPoint) {
+  const out = safeClone(sourceDoc);
+  out.points = [];
+  out.lines = safeClone(sourceDoc.lines ?? []);
+  out.circles = safeClone(sourceDoc.circles ?? []);
+  out.starPointId = undefined;
+
+  for (const point of sourceDoc.points ?? []) {
+    const mapped = mapPoint({ x: point.x, y: point.y });
+    if (!mapped) continue;
+    const nextPoint = { ...point, x: mapped.x, y: mapped.y };
+    delete nextPoint.z;
+    nextPoint.intersectionHints = undefined;
+    out.points.push(nextPoint);
+  }
+
+  return sanitizeConvertedDoc(out);
+}
+
+/**
+ * Convert between hyperbolic model coordinates while preserving object incidences.
+ *
+ * @param {import("./engine/state.js").ConstructionDoc} sourceDoc
+ * @param {GeometryType} from
+ * @param {GeometryType} to
+ */
+function convertHyperbolicDoc(sourceDoc, from, to) {
+  if (from === to) return safeClone(sourceDoc);
+  const out = safeClone(sourceDoc);
+  out.points = [];
+  out.lines = safeClone(sourceDoc.lines ?? []);
+  out.circles = safeClone(sourceDoc.circles ?? []);
+  out.starPointId = undefined;
+
+  for (const point of sourceDoc.points ?? []) {
+    const inPoincare = hyperbolicToPoincarePoint(from, { x: point.x, y: point.y });
+    if (!inPoincare) continue;
+    const mapped = poincareToHyperbolicPoint(to, inPoincare);
+    const nextPoint = { ...point, x: mapped.x, y: mapped.y };
+    delete nextPoint.z;
+    nextPoint.intersectionHints = undefined;
+    out.points.push(nextPoint);
+  }
+
+  return sanitizeConvertedDoc(out);
+}
+
+/**
+ * @param {import("./engine/state.js").ConstructionDoc} doc
+ */
+function sanitizeConvertedDoc(doc) {
+  const pointIds = new Set((doc.points ?? []).map((point) => point.id));
+  doc.lines = (doc.lines ?? []).filter((line) => pointIds.has(line.p1) && pointIds.has(line.p2));
+  doc.circles = (doc.circles ?? []).filter(
+    (circle) => pointIds.has(circle.center) && pointIds.has(circle.radiusPoint),
+  );
+
+  const lineIds = new Set(doc.lines.map((line) => line.id));
+  const circleIds = new Set(doc.circles.map((circle) => circle.id));
+  const curveExists = (ref) => (ref.kind === "line" ? lineIds.has(ref.id) : circleIds.has(ref.id));
+  const objectExists = (ref) =>
+    ref.kind === "point" ? pointIds.has(ref.id) : ref.kind === "line" ? lineIds.has(ref.id) : circleIds.has(ref.id);
+
+  for (const point of doc.points) {
+    if (!Array.isArray(point.constraints) || point.constraints.length === 0) {
+      point.constraints = undefined;
+    } else {
+      point.constraints = point.constraints.filter((ref) => curveExists(ref));
+      if (point.constraints.length === 0) point.constraints = undefined;
+    }
+    point.intersectionHints = undefined;
+  }
+
+  const steps = Array.isArray(doc.historySteps) ? doc.historySteps : [];
+  doc.historySteps = steps.filter((step) => {
+    if (step.type === "point") return pointIds.has(step.pointId) && (!step.on || curveExists(step.on));
+    if (step.type === "line") return lineIds.has(step.lineId);
+    if (step.type === "circle") return circleIds.has(step.circleId);
+    if (step.type === "intersection") return pointIds.has(step.pointId) && curveExists(step.a) && curveExists(step.b);
+    if (step.type === "tool") {
+      return objectExists(step.output) && step.inputs.every((ref) => objectExists(ref));
+    }
+    return false;
+  });
+
+  doc.nextId = Math.max(1, doc.nextId ?? 1, getNextIdFromObjects(doc.points, doc.lines, doc.circles));
+  return doc;
+}
+
+/**
+ * @param {Array<{id:string}>} points
+ * @param {Array<{id:string}>} lines
+ * @param {Array<{id:string}>} circles
+ */
+function getNextIdFromObjects(points, lines, circles) {
+  const all = [...(points ?? []), ...(lines ?? []), ...(circles ?? [])];
+  let maxId = 0;
+  for (const obj of all) {
+    const num = extractNumericId(obj.id);
+    if (num > maxId) maxId = num;
+  }
+  return maxId + 1;
+}
+
+/** @param {string} id */
+function extractNumericId(id) {
+  if (typeof id !== "string" || id.length < 2) return 0;
+  const n = Number.parseInt(id.slice(1), 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Unit-circle inversion around center `c`: c + (p-c)/|p-c|^2.
+ *
+ * @param {{x:number,y:number}} p
+ * @param {{x:number,y:number}} c
+ */
+function invertPointAtCenter(p, c) {
+  const dx = p.x - c.x;
+  const dy = p.y - c.y;
+  const d2 = dx * dx + dy * dy;
+  if (d2 <= 1e-12) return { x: c.x + 1e6, y: c.y };
+  return { x: c.x + dx / d2, y: c.y + dy / d2 };
+}
+
+/**
+ * @param {import("./engine/state.js").ConstructionDoc} inversiveDoc
+ */
+function getInversiveCenter(inversiveDoc) {
+  const starId = inversiveDoc?.starPointId;
+  const star = starId ? inversiveDoc.points?.find((point) => point.id === starId) : null;
+  if (!star) return { x: 0, y: 0 };
+  return { x: star.x, y: star.y };
+}
+
+/**
+ * Keep transformed geometry visible after switching paired models.
+ *
+ * @param {HTMLCanvasElement} canvas
+ * @param {import("./engine/state.js").ViewState} view
+ * @param {GeometryType} geom
+ * @param {import("./engine/state.js").ConstructionDoc} doc
+ */
+function fit2DViewToDoc(canvas, view, geom, doc) {
+  if (!view || view.kind !== "2d") return;
+  const sourcePoints = (doc.points ?? []).filter((point) => {
+    if (point.hidden) return false;
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+    if (geom === GeometryType.INVERSIVE_EUCLIDEAN && doc.starPointId && point.id === doc.starPointId) return false;
+    return true;
+  });
+  const points = sourcePoints.map((point) =>
+    geom === GeometryType.HYPERBOLIC_KLEIN
+      ? hyperbolicInternalToDisplay2D(geom, { x: point.x, y: point.y })
+      : { x: point.x, y: point.y },
+  );
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, rect.width);
+  const height = Math.max(1, rect.height);
+  if (points.length === 0) {
+    if (geom === GeometryType.HYPERBOLIC_POINCARE || geom === GeometryType.HYPERBOLIC_KLEIN) {
+      view.scale = Math.min(width, height) * 0.42;
+      view.offsetX = width / 2;
+      view.offsetY = height / 2;
+      // @ts-ignore - runtime extension set in view2d initializer
+      view.initialized = true;
+    }
+    return;
+  }
+
+  let minX = points[0].x;
+  let maxX = points[0].x;
+  let minY = points[0].y;
+  let maxY = points[0].y;
+  for (const point of points) {
+    if (point.x < minX) minX = point.x;
+    if (point.x > maxX) maxX = point.x;
+    if (point.y < minY) minY = point.y;
+    if (point.y > maxY) maxY = point.y;
+  }
+
+  // Keep the full unit-disk boundary visible for disk models.
+  if (geom === GeometryType.HYPERBOLIC_POINCARE || geom === GeometryType.HYPERBOLIC_KLEIN) {
+    minX = Math.min(minX, -1);
+    maxX = Math.max(maxX, 1);
+    minY = Math.min(minY, -1);
+    maxY = Math.max(maxY, 1);
+  }
+
+  const spanX = Math.max(1e-6, maxX - minX);
+  const spanY = Math.max(1e-6, maxY - minY);
+  const margin = 80;
+  const scaleX = (width - margin * 2) / spanX;
+  const scaleY = (height - margin * 2) / spanY;
+  const maxScale =
+    geom === GeometryType.HYPERBOLIC_POINCARE || geom === GeometryType.HYPERBOLIC_KLEIN ? Math.min(width, height) * 0.46 : 600;
+  const nextScale = Math.max(20, Math.min(maxScale, Math.min(scaleX, scaleY) || view.scale));
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+
+  view.scale = nextScale;
+  view.offsetX = width / 2 - cx * nextScale;
+  view.offsetY = height / 2 + cy * nextScale;
+  // @ts-ignore - runtime extension set in view2d initializer
+  view.initialized = true;
+}
+
 /** @param {GeometryType} geom */
 function geometryDisplayName(geom) {
   switch (geom) {
@@ -959,6 +1344,10 @@ function geometryDisplayName(geom) {
       return "Hyperbolic (Poincaré)";
     case GeometryType.HYPERBOLIC_HALF_PLANE:
       return "Hyperbolic (Half-plane)";
+    case GeometryType.HYPERBOLIC_KLEIN:
+      return "Hyperbolic (Klein)";
+    case GeometryType.HYPERBOLIC_HYPERBOLOID:
+      return "Hyperbolic (Hyperboloid)";
     default:
       return geom;
   }
