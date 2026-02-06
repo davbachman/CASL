@@ -1,4 +1,4 @@
-import { createApp } from "./app.js?v=20260206-34";
+import { createApp } from "./app.js?v=20260206-40";
 
 const deps = {
   canvas: /** @type {HTMLCanvasElement} */ (document.getElementById("canvas")),
@@ -26,7 +26,7 @@ const deps = {
   printHistoryButton: /** @type {HTMLButtonElement} */ (document.getElementById("printHistoryBtn")),
 };
 
-createApp(deps);
+const app = createApp(deps);
 
 const menuDropdowns = Array.from(document.querySelectorAll(".menu-dropdown"));
 const menuItems = Array.from(document.querySelectorAll("[data-action]"));
@@ -59,11 +59,11 @@ function setModelSelectionUI() {
 }
 
 function isShowingSteps() {
-  return deps.showStepsButton.textContent?.trim().toLowerCase() === "hide steps";
+  return app.isShowingSteps();
 }
 
 function setViewMenuState() {
-  const historyOpen = !deps.historyPane.hidden;
+  const historyOpen = app.isHistoryOpen();
   if (showHistoryMenuItem) showHistoryMenuItem.disabled = historyOpen;
   if (hideHistoryMenuItem) hideHistoryMenuItem.disabled = !historyOpen;
   const showingSteps = isShowingSteps();
@@ -85,25 +85,38 @@ document.addEventListener("keydown", (event) => {
 
 for (const item of menuItems) {
   if (!(item instanceof HTMLElement)) continue;
-  item.addEventListener("click", () => {
+  item.addEventListener("click", async () => {
     const action = item.dataset.action;
     if (!action) return;
 
-    if (action === "save-construction") deps.saveConstructionButton.click();
-    if (action === "import-construction") deps.importConstructionButton.click();
-    if (action === "save-tools") deps.saveToolsButton.click();
-    if (action === "import-tools") deps.importToolsButton.click();
-    if (action === "undo") deps.undoButton.click();
-    if (action === "clear") deps.clearButton.click();
-    if (action === "show-history" && deps.historyPane.hidden) deps.historyToggleButton.click();
-    if (action === "hide-history" && !deps.historyPane.hidden) deps.historyToggleButton.click();
-    if (action === "show-steps" && !isShowingSteps()) deps.showStepsButton.click();
-    if (action === "hide-steps" && isShowingSteps()) deps.showStepsButton.click();
+    if (action === "save-construction") {
+      try {
+        await app.saveConstruction();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unable to save construction.";
+        window.alert(`Save construction failed: ${msg}`);
+      }
+    }
+    if (action === "import-construction") app.importConstruction();
+    if (action === "save-tools") {
+      try {
+        await app.saveTools();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unable to save tools.";
+        window.alert(`Save tools failed: ${msg}`);
+      }
+    }
+    if (action === "import-tools") app.importTools();
+    if (action === "undo") app.undo();
+    if (action === "clear") app.clear();
+    if (action === "show-history") app.setHistoryOpen(true);
+    if (action === "hide-history") app.setHistoryOpen(false);
+    if (action === "show-steps") app.setShowSteps(true);
+    if (action === "hide-steps") app.setShowSteps(false);
     if (action === "set-model") {
       const geom = item.dataset.geometry;
       if (geom && deps.geometrySelect.value !== geom) {
-        deps.geometrySelect.value = geom;
-        deps.geometrySelect.dispatchEvent(new Event("change", { bubbles: true }));
+        app.setGeometry(geom);
       }
     }
 

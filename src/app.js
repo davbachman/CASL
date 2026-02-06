@@ -153,8 +153,7 @@ export function createApp(deps) {
     deps.toolHint.textContent = `${geomLabel}: ${hint}`;
   };
 
-  deps.geometrySelect.addEventListener("change", () => {
-    const next = /** @type {GeometryType} */ (deps.geometrySelect.value);
+  const applyGeometryChange = (next) => {
     state.activeGeometry = next;
     state.pending = null;
     state.selection = null;
@@ -170,6 +169,10 @@ export function createApp(deps) {
     updateToolHint();
     updateUndoButton();
     renderer.requestRender(true);
+  };
+
+  deps.geometrySelect.addEventListener("change", () => {
+    applyGeometryChange(/** @type {GeometryType} */ (deps.geometrySelect.value));
   });
 
   const handleToolClick = (event) => {
@@ -223,27 +226,66 @@ export function createApp(deps) {
 
   deps.clearButton.addEventListener("click", doClear);
 
-  deps.showStepsButton.addEventListener("click", () => {
-    state.showSteps = !state.showSteps;
+  const setShowSteps = (show) => {
+    if (state.showSteps === show) return;
+    state.showSteps = show;
     updateDebugVisibility();
     updateShowStepsButton();
     renderer.requestRender(true);
-  });
+  };
 
-  deps.saveToolsButton.addEventListener("click", () => {
+  const toggleShowSteps = () => {
+    setShowSteps(!state.showSteps);
+  };
+
+  const saveTools = async () => {
     const payload = {
       kind: "compass-straightedge-tools",
       version: 1,
       savedAt: new Date().toISOString(),
       customTools: safeClone(state.customTools),
     };
-    downloadJsonFile(`tools-${dateStamp()}.json`, payload);
-  });
+    await saveJsonFileWithDialog(`tools-${dateStamp()}.json`, payload);
+  };
 
-  deps.importToolsButton.addEventListener("click", () => {
+  const openImportToolsDialog = () => {
     deps.importToolsInput.value = "";
     deps.importToolsInput.click();
+  };
+
+  const saveConstruction = async () => {
+    const payload = {
+      kind: "compass-straightedge-construction",
+      version: 1,
+      savedAt: new Date().toISOString(),
+      state: {
+        activeGeometry: state.activeGeometry,
+        activeTool: state.activeTool,
+        showSteps: state.showSteps,
+        nextToolId: state.nextToolId,
+        docs: safeClone(state.docs),
+        views: safeClone(state.views),
+        customTools: safeClone(state.customTools),
+      },
+    };
+    await saveJsonFileWithDialog(`construction-${dateStamp()}.json`, payload);
+  };
+
+  const openImportConstructionDialog = () => {
+    deps.importConstructionInput.value = "";
+    deps.importConstructionInput.click();
+  };
+
+  deps.showStepsButton.addEventListener("click", toggleShowSteps);
+
+  deps.saveToolsButton.addEventListener("click", () => {
+    void saveTools().catch((err) => {
+      const msg = err instanceof Error ? err.message : "Unable to save tools.";
+      window.alert(`Save tools failed: ${msg}`);
+    });
   });
+
+  deps.importToolsButton.addEventListener("click", openImportToolsDialog);
 
   deps.importToolsInput.addEventListener("change", () => {
     void (async () => {
@@ -269,27 +311,13 @@ export function createApp(deps) {
   });
 
   deps.saveConstructionButton.addEventListener("click", () => {
-    const payload = {
-      kind: "compass-straightedge-construction",
-      version: 1,
-      savedAt: new Date().toISOString(),
-      state: {
-        activeGeometry: state.activeGeometry,
-        activeTool: state.activeTool,
-        showSteps: state.showSteps,
-        nextToolId: state.nextToolId,
-        docs: safeClone(state.docs),
-        views: safeClone(state.views),
-        customTools: safeClone(state.customTools),
-      },
-    };
-    downloadJsonFile(`construction-${dateStamp()}.json`, payload);
+    void saveConstruction().catch((err) => {
+      const msg = err instanceof Error ? err.message : "Unable to save construction.";
+      window.alert(`Save construction failed: ${msg}`);
+    });
   });
 
-  deps.importConstructionButton.addEventListener("click", () => {
-    deps.importConstructionInput.value = "";
-    deps.importConstructionInput.click();
-  });
+  deps.importConstructionButton.addEventListener("click", openImportConstructionDialog);
 
   deps.importConstructionInput.addEventListener("change", () => {
     void (async () => {
@@ -362,10 +390,10 @@ export function createApp(deps) {
     doUndo();
   });
 
-  deps.historyToggleButton.addEventListener("click", () => {
-    const isOpen = !deps.historyPane.hidden;
-    setHistoryOpen(!isOpen);
-  });
+  const isHistoryOpen = () => !deps.historyPane.hidden;
+  const toggleHistoryOpen = () => setHistoryOpen(!isHistoryOpen());
+
+  deps.historyToggleButton.addEventListener("click", toggleHistoryOpen);
 
   deps.buildToolButton.addEventListener("click", () => {
     const name = window.prompt("Name your new tool:", "");
@@ -489,6 +517,23 @@ export function createApp(deps) {
     }
     setActiveToolButton(state.activeTool);
   }
+
+  return {
+    undo: doUndo,
+    clear: doClear,
+    saveTools,
+    importTools: openImportToolsDialog,
+    saveConstruction,
+    importConstruction: openImportConstructionDialog,
+    setGeometry: (geom) => {
+      deps.geometrySelect.value = geom;
+      applyGeometryChange(geom);
+    },
+    setShowSteps,
+    isShowingSteps: () => state.showSteps,
+    setHistoryOpen,
+    isHistoryOpen,
+  };
 }
 
 /** @param {unknown} value */
@@ -506,6 +551,191 @@ function dateStamp() {
   const hh = String(now.getHours()).padStart(2, "0");
   const mi = String(now.getMinutes()).padStart(2, "0");
   return `${yyyy}${mm}${dd}-${hh}${mi}`;
+}
+
+/**
+ * Save JSON content using the platform save dialog when available.
+ *
+ * @param {string} filename
+ * @param {unknown} payload
+ */
+async function saveJsonFileWithDialog(filename, payload) {
+  const json = JSON.stringify(payload, null, 2);
+  const modernSaved = await tryModernSavePicker(filename, json);
+  if (modernSaved === "saved" || modernSaved === "cancelled") return;
+
+  const legacySaved = await tryLegacySavePicker(filename, json);
+  if (legacySaved === "saved" || legacySaved === "cancelled") return;
+
+  if (modernSaved === "blocked") {
+    throw new Error("Native save dialog is blocked in this browser context.");
+  }
+
+  if (isSafariBrowser()) {
+    const opened = openSafariSaveHelper(filename, json);
+    if (opened) return;
+  }
+
+  downloadJsonFile(filename, payload);
+}
+
+/**
+ * @param {string} filename
+ * @param {string} json
+ * @returns {Promise<"saved"|"cancelled"|"unsupported"|"blocked">}
+ */
+async function tryModernSavePicker(filename, json) {
+  // @ts-ignore - not all browsers expose this type
+  const picker = window.showSaveFilePicker;
+  if (typeof picker !== "function") return "unsupported";
+  try {
+    const handle = await picker({
+      suggestedName: filename,
+      types: [
+        {
+          description: "JSON File",
+          accept: { "application/json": [".json"] },
+        },
+      ],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(json);
+    await writable.close();
+    return "saved";
+  } catch (err) {
+    if (isAbortError(err)) return "cancelled";
+    if (isPermissionError(err)) return "blocked";
+    throw err;
+  }
+}
+
+/**
+ * @param {string} filename
+ * @param {string} json
+ * @returns {Promise<"saved"|"cancelled"|"unsupported">}
+ */
+async function tryLegacySavePicker(filename, json) {
+  // @ts-ignore - legacy Chromium API
+  const picker = window.chooseFileSystemEntries;
+  if (typeof picker !== "function") return "unsupported";
+  try {
+    // @ts-ignore - legacy Chromium API shape
+    const handle = await picker({
+      type: "save-file",
+      suggestedName: filename,
+      accepts: [
+        {
+          description: "JSON File",
+          extensions: ["json"],
+          mimeTypes: ["application/json"],
+        },
+      ],
+    });
+
+    if (typeof handle.createWritable === "function") {
+      const writable = await handle.createWritable();
+      await writable.write(json);
+      await writable.close();
+      return "saved";
+    }
+    if (typeof handle.createWriter === "function") {
+      const writer = await handle.createWriter();
+      await new Promise((resolve, reject) => {
+        writer.onerror = reject;
+        writer.onwriteend = resolve;
+        writer.write(0, new Blob([json], { type: "application/json" }));
+      });
+      if (typeof writer.close === "function") writer.close();
+      return "saved";
+    }
+    return "unsupported";
+  } catch (err) {
+    if (isAbortError(err)) return "cancelled";
+    throw err;
+  }
+}
+
+/** @param {unknown} err */
+function isAbortError(err) {
+  return !!(err && typeof err === "object" && "name" in err && err.name === "AbortError");
+}
+
+/** @param {unknown} err */
+function isPermissionError(err) {
+  return !!(
+    err &&
+    typeof err === "object" &&
+    "name" in err &&
+    (err.name === "NotAllowedError" || err.name === "SecurityError")
+  );
+}
+
+function isSafariBrowser() {
+  const ua = navigator.userAgent || "";
+  const vendor = navigator.vendor || "";
+  const safariVendor = vendor.includes("Apple");
+  const isSafariUA = /Safari/i.test(ua) && !/Chrome|Chromium|CriOS|Edg|OPR|Firefox|FxiOS/i.test(ua);
+  return safariVendor && isSafariUA;
+}
+
+/**
+ * Safari fallback helper window with explicit download-as instructions.
+ *
+ * @param {string} filename
+ * @param {string} json
+ * @returns {boolean}
+ */
+function openSafariSaveHelper(filename, json) {
+  const popup = window.open("", "_blank", "width=760,height=620");
+  if (!popup) return false;
+
+  popup.document.open();
+  popup.document.write(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(filename)} - Save</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 18px; color: #111827; }
+      h1 { margin: 0 0 10px; font-size: 18px; }
+      p { margin: 8px 0; line-height: 1.35; }
+      .actions { margin: 12px 0 14px; display: flex; gap: 10px; flex-wrap: wrap; }
+      a, button { font: inherit; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 12px; background: #fff; cursor: pointer; text-decoration: none; color: #111827; }
+      a:hover, button:hover { border-color: #94a3b8; background: #f8fafc; }
+      pre { white-space: pre-wrap; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; padding: 10px; max-height: 62vh; overflow: auto; font-size: 12px; }
+      .note { color: #475569; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <h1>Save JSON in Safari</h1>
+    <p>Choose one option below:</p>
+    <p class="note">1) Click <b>Download JSON</b>, then save from Safari Downloads.</p>
+    <p class="note">2) Right-click <b>Download JSON</b> and choose <b>Download Linked File As...</b> to choose filename/location now.</p>
+    <div class="actions">
+      <a id="downloadLink" href="#">Download JSON</a>
+      <button type="button" id="copyBtn">Copy JSON</button>
+    </div>
+    <pre id="jsonBody"></pre>
+    <script>
+      const text = ${JSON.stringify(json)};
+      const blob = new Blob([text], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.getElementById("downloadLink");
+      link.href = url;
+      link.download = ${JSON.stringify(filename)};
+      document.getElementById("jsonBody").textContent = text;
+      document.getElementById("copyBtn").addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(text); alert("JSON copied."); }
+        catch { alert("Clipboard copy failed. You can still select/copy from the text below."); }
+      });
+      window.addEventListener("beforeunload", () => URL.revokeObjectURL(url));
+    </script>
+  </body>
+</html>`);
+  popup.document.close();
+  popup.focus();
+  return true;
 }
 
 /**
