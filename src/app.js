@@ -1,6 +1,6 @@
 import { GeometryType, ToolType, createDefaultView, createEmptyDoc, createInitialState } from "./engine/state.js";
 import { createHistory } from "./engine/history.js";
-import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260206-64";
+import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260206-65";
 import {
   hyperbolicInternalToDisplay2D,
   hyperbolicToPoincarePoint,
@@ -8,8 +8,8 @@ import {
   poincareToHyperbolicPoint,
 } from "./engine/hyperbolicModels.js";
 import { installContextMenu } from "./ui/contextMenu.js";
-import { attachCanvasController } from "./engine/inputController.js?v=20260206-64";
-import { createRenderer } from "./engine/renderer.js?v=20260206-64";
+import { attachCanvasController } from "./engine/inputController.js?v=20260206-65";
+import { createRenderer } from "./engine/renderer.js?v=20260206-65";
 import { makeId } from "./engine/util/ids.js";
 
 /**
@@ -1013,6 +1013,9 @@ function convertDocForModelSwitch(from, to, sourceDoc, targetDoc) {
   if (isHyperbolicGeometry(from) && isHyperbolicGeometry(to)) {
     return convertHyperbolicDoc(sourceDoc, from, to);
   }
+  if (isSphericalModel(from) && isSphericalModel(to)) {
+    return safeClone(sourceDoc);
+  }
   return null;
 }
 
@@ -1024,8 +1027,14 @@ function isCrossModelConvertible(from, to) {
   const euclideanFamily =
     (from === GeometryType.EUCLIDEAN || from === GeometryType.INVERSIVE_EUCLIDEAN) &&
     (to === GeometryType.EUCLIDEAN || to === GeometryType.INVERSIVE_EUCLIDEAN);
+  const sphericalFamily = isSphericalModel(from) && isSphericalModel(to);
   const hyperbolicFamily = isHyperbolicGeometry(from) && isHyperbolicGeometry(to);
-  return euclideanFamily || hyperbolicFamily;
+  return euclideanFamily || sphericalFamily || hyperbolicFamily;
+}
+
+/** @param {GeometryType} geom */
+function isSphericalModel(geom) {
+  return geom === GeometryType.SPHERICAL || geom === GeometryType.SPHERICAL_STEREOGRAPHIC;
 }
 
 /**
@@ -1275,11 +1284,16 @@ function fit2DViewToDoc(canvas, view, geom, doc) {
     if (geom === GeometryType.INVERSIVE_EUCLIDEAN && doc.starPointId && point.id === doc.starPointId) return false;
     return true;
   });
-  const points = sourcePoints.map((point) =>
-    geom === GeometryType.HYPERBOLIC_KLEIN
-      ? hyperbolicInternalToDisplay2D(geom, { x: point.x, y: point.y })
-      : { x: point.x, y: point.y },
-  );
+  const points = sourcePoints
+    .map((point) => {
+      if (geom === GeometryType.SPHERICAL_STEREOGRAPHIC) {
+        if (!Number.isFinite(point.z)) return null;
+        return sphereToStereographicPoint({ x: point.x, y: point.y, z: point.z });
+      }
+      if (geom === GeometryType.HYPERBOLIC_KLEIN) return hyperbolicInternalToDisplay2D(geom, { x: point.x, y: point.y });
+      return { x: point.x, y: point.y };
+    })
+    .filter((point) => !!point);
   const rect = canvas.getBoundingClientRect();
   const width = Math.max(1, rect.width);
   const height = Math.max(1, rect.height);
@@ -1340,6 +1354,8 @@ function geometryDisplayName(geom) {
       return "Inversive Euclidean";
     case GeometryType.SPHERICAL:
       return "Spherical";
+    case GeometryType.SPHERICAL_STEREOGRAPHIC:
+      return "Spherical (Stereographic)";
     case GeometryType.HYPERBOLIC_POINCARE:
       return "Hyperbolic (Poincaré)";
     case GeometryType.HYPERBOLIC_HALF_PLANE:
@@ -1351,6 +1367,20 @@ function geometryDisplayName(geom) {
     default:
       return geom;
   }
+}
+
+/**
+ * @param {{x:number,y:number,z:number}} p
+ * @returns {{x:number,y:number} | null}
+ */
+function sphereToStereographicPoint(p) {
+  const den = 1 - p.z;
+  if (den <= 1e-9) return null;
+  const x = p.x / den;
+  const y = p.y / den;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if (Math.abs(x) > 1e6 || Math.abs(y) > 1e6) return null;
+  return { x, y };
 }
 
 /** @param {import("./engine/state.js").AppState} state */

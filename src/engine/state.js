@@ -6,6 +6,7 @@ export const GeometryType = /** @type {const} */ ({
   EUCLIDEAN: "euclidean",
   INVERSIVE_EUCLIDEAN: "inversive_euclidean",
   SPHERICAL: "spherical",
+  SPHERICAL_STEREOGRAPHIC: "spherical_stereographic",
   HYPERBOLIC_POINCARE: "hyperbolic_poincare",
   HYPERBOLIC_HALF_PLANE: "hyperbolic_half_plane",
   HYPERBOLIC_KLEIN: "hyperbolic_klein",
@@ -220,6 +221,8 @@ export function createDefaultView(geom) {
         ? 120
         : geom === GeometryType.HYPERBOLIC_KLEIN
           ? 260
+        : geom === GeometryType.SPHERICAL_STEREOGRAPHIC
+          ? 110
         : 90;
   /** @type {ViewState} */
   const v = { kind: "2d", scale: baseScale, offsetX: 0, offsetY: 0 };

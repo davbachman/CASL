@@ -1,9 +1,19 @@
 import { GeometryType, ToolType, nextCurveLabel, nextPointLabel } from "./state.js";
-import { constrain2DPoint, derive2DCircleCurve, derive2DLineCurve, deriveSphereCircle, deriveSphereGreatCircle, intersectSpherePlanes, is2DPointInDomain } from "./geometry.js";
+import {
+  constrain2DPoint,
+  derive2DCircleCurve,
+  derive2DLineCurve,
+  deriveSphereCircle,
+  deriveSphereGreatCircle,
+  intersectSpherePlanes,
+  is2DPointInDomain,
+  isSphere,
+} from "./geometry.js";
 import { intersectCurves, signedDistanceToCurve } from "./geom2d.js";
 import { samplePoincareCirclePoints, samplePoincareGeodesicPoints } from "./hyperbolicCurves.js";
 import { hyperbolicDisplay2DToInternal, hyperbolicInternalToDisplay2D } from "./hyperbolicModels.js";
 import { hyperboloidViewport, projectPoincareOnHyperboloid, screenToHyperboloidPoincare } from "./hyperboloidView.js?v=20260206-64";
+import { sampleSpherePlanePoints, sphereToStereographic, stereographicToSphere } from "./stereographic.js";
 import { makeId } from "./util/ids.js";
 import { initialize2DViewIfNeeded, pan2D, screenToWorld, worldToScreen, zoom2DAt } from "./view2d.js";
 import { projectSphere, rotateByDrag, rotateHyperboloidByDrag, rotateToView, screenToSpherePoint, zoomSphere } from "./sphereView.js";
@@ -124,6 +134,14 @@ export function attachCanvasController(canvas, deps) {
         const rect = canvas.getBoundingClientRect();
         const vp = sphereViewport(/** @type {any} */ (view), rect.width, rect.height);
         const q = screenToSpherePoint(/** @type {any} */ (view), pos, vp);
+        if (!q) return;
+        const constrained = applySphereConstraints(doc, p, q);
+        p.x = constrained.x;
+        p.y = constrained.y;
+        p.z = constrained.z;
+        enforceSphereConstraints(doc);
+      } else if (geom === GeometryType.SPHERICAL_STEREOGRAPHIC) {
+        const q = screenToStereographicSpherePoint(/** @type {any} */ (view), pos);
         if (!q) return;
         const constrained = applySphereConstraints(doc, p, q);
         p.x = constrained.x;
@@ -258,6 +276,23 @@ function hitTestPoint(state, geom, pos, canvas) {
     }
     return bestD <= threshold ? best : null;
   }
+  if (geom === GeometryType.SPHERICAL_STEREOGRAPHIC) {
+    const v2d = /** @type {any} */ (view);
+    let best = null;
+    let bestD = Infinity;
+    for (const pt of doc.points) {
+      if (pt.hidden) continue;
+      if (pt.z == null) continue;
+      const s = projectSphericalPointToStereographicScreen(v2d, { x: pt.x, y: pt.y, z: pt.z });
+      if (!s) continue;
+      const d = Math.hypot(s.x - pos.x, s.y - pos.y);
+      if (d < bestD) {
+        bestD = d;
+        best = pt;
+      }
+    }
+    return bestD <= threshold ? best : null;
+  }
   if (geom === GeometryType.HYPERBOLIC_HYPERBOLOID) {
     const rect = canvas.getBoundingClientRect();
     const vp = hyperboloidViewport(/** @type {any} */ (view), rect.width, rect.height);
@@ -335,6 +370,33 @@ function hitTestCurve(state, geom, pos, canvas) {
       }
     }
     return bestD <= 0.05 ? best : null;
+  }
+  if (geom === GeometryType.SPHERICAL_STEREOGRAPHIC) {
+    const v2d = /** @type {any} */ (view);
+    /** @type {null | {kind:"line"|"circle", id:string}} */
+    let best = null;
+    let bestDPx = thresholdPx;
+    for (const line of doc.lines) {
+      if (line.hidden) continue;
+      const plane = deriveSphereGreatCircle(doc, line);
+      if (!plane) continue;
+      const dPx = distanceToStereographicSphereCurvePx(v2d, pos, plane);
+      if (dPx < bestDPx) {
+        bestDPx = dPx;
+        best = { kind: "line", id: line.id };
+      }
+    }
+    for (const circle of doc.circles) {
+      if (circle.hidden) continue;
+      const plane = deriveSphereCircle(doc, circle);
+      if (!plane) continue;
+      const dPx = distanceToStereographicSphereCurvePx(v2d, pos, plane);
+      if (dPx < bestDPx) {
+        bestDPx = dPx;
+        best = { kind: "circle", id: circle.id };
+      }
+    }
+    return best;
   }
   if (geom === GeometryType.HYPERBOLIC_HYPERBOLOID) {
     const rect = canvas.getBoundingClientRect();
@@ -448,6 +510,15 @@ function getOrCreatePointAtClick(state, geom, doc, view, pos, canvas, pushHistor
     const p = screenToSpherePoint(/** @type {any} */ (view), pos, vp);
     if (!p) return null;
     const snapped = snapSpherePointToCurves(doc, /** @type {any} */ (view), vp, pos, p);
+    pushHistory();
+    const id = createSpherePoint(doc, snapped?.point ?? p, snapped ? [snapped.constraint] : undefined);
+    recordPointStep(doc, id, snapped?.constraint);
+    return { id, created: true };
+  }
+  if (geom === GeometryType.SPHERICAL_STEREOGRAPHIC) {
+    const p = screenToStereographicSpherePoint(/** @type {any} */ (view), pos);
+    if (!p) return null;
+    const snapped = snapSpherePointToCurvesStereographic(doc, /** @type {any} */ (view), pos, p);
     pushHistory();
     const id = createSpherePoint(doc, snapped?.point ?? p, snapped ? [snapped.constraint] : undefined);
     recordPointStep(doc, id, snapped?.constraint);
@@ -691,7 +762,7 @@ function onIntersectClick(state, geom, doc, obj, view, canvas, pushHistory) {
   state.selection = null;
   if (a.kind === b.kind && a.id === b.id) return;
 
-  if (geom === GeometryType.SPHERICAL) {
+  if (isSphere(geom)) {
     const lineA = a.kind === "line" ? doc.lines.find((l) => l.id === a.id) : null;
     const circleA = a.kind === "circle" ? doc.circles.find((c) => c.id === a.id) : null;
     const lineB = b.kind === "line" ? doc.lines.find((l) => l.id === b.id) : null;
@@ -700,9 +771,14 @@ function onIntersectClick(state, geom, doc, obj, view, canvas, pushHistory) {
     const planeB = lineB ? deriveSphereGreatCircle(doc, lineB) : circleB ? deriveSphereCircle(doc, circleB) : null;
     if (!planeA || !planeB) return;
     const hits = intersectSpherePlanes(planeA, planeB);
-    const rect = canvas.getBoundingClientRect();
-    const vp = sphereViewport(/** @type {any} */ (view), rect.width, rect.height);
-    const newPts = filterNewSpherePoints(doc, /** @type {any} */ (view), vp, hits, 10);
+    const newPts =
+      geom === GeometryType.SPHERICAL
+        ? (() => {
+            const rect = canvas.getBoundingClientRect();
+            const vp = sphereViewport(/** @type {any} */ (view), rect.width, rect.height);
+            return filterNewSpherePoints(doc, /** @type {any} */ (view), vp, hits, 10);
+          })()
+        : filterNewSpherePointsStereographic(doc, /** @type {any} */ (view), hits, 10);
     if (newPts.length > 0) pushHistory();
     const constraints = [
       { kind: a.kind, id: a.id },
@@ -882,6 +958,38 @@ function filterNewSpherePoints(doc, view, vp, hits, thresholdPx) {
 }
 
 /**
+ * @param {any} doc
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ * @param {{x:number,y:number,z:number}[]} hits
+ * @param {number} thresholdPx
+ */
+function filterNewSpherePointsStereographic(doc, view, hits, thresholdPx) {
+  /** @type {{x:number,y:number,z:number}[]} */
+  const out = [];
+  for (const p0 of hits) {
+    const p = norm3(p0);
+    const s = projectSphericalPointToStereographicScreen(view, p);
+    if (!s) continue;
+    const isNearExisting = doc.points.some((q) => {
+      if (q.hidden) return false;
+      if (q.z == null) return false;
+      const qs = projectSphericalPointToStereographicScreen(view, { x: q.x, y: q.y, z: q.z });
+      if (!qs) return false;
+      return Math.hypot(qs.x - s.x, qs.y - s.y) <= thresholdPx;
+    });
+    if (isNearExisting) continue;
+    const isNearOut = out.some((q) => {
+      const qs = projectSphericalPointToStereographicScreen(view, q);
+      if (!qs) return false;
+      return Math.hypot(qs.x - s.x, qs.y - s.y) <= thresholdPx;
+    });
+    if (isNearOut) continue;
+    out.push(p);
+  }
+  return out;
+}
+
+/**
  * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
  * @param {number} cssW
  * @param {number} cssH
@@ -889,6 +997,28 @@ function filterNewSpherePoints(doc, view, vp, hits, thresholdPx) {
 function sphereViewport(view, cssW, cssH) {
   const baseR = Math.min(cssW, cssH) * 0.38;
   return { cx: cssW / 2, cy: cssH / 2, r: baseR * view.zoom };
+}
+
+/**
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ * @param {{x:number,y:number}} pos
+ * @returns {{x:number,y:number,z:number} | null}
+ */
+function screenToStereographicSpherePoint(view, pos) {
+  const world = screenToWorld(view, pos);
+  if (!world) return null;
+  return stereographicToSphere(world);
+}
+
+/**
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ * @param {{x:number,y:number,z:number}} p
+ * @returns {{x:number,y:number} | null}
+ */
+function projectSphericalPointToStereographicScreen(view, p) {
+  const plane = sphereToStereographic(p);
+  if (!plane) return null;
+  return worldToScreen(view, plane);
 }
 
 /**
@@ -1318,7 +1448,7 @@ function applyCustomTool(state, geom, doc, tool, inputs, view) {
       }
 
       if (step.kind === "circle" && step.op === "circle_fixed") {
-        if (geom === GeometryType.SPHERICAL) throw new Error("Fixed-radius circles not supported on sphere.");
+        if (isSphere(geom)) throw new Error("Fixed-radius circles not supported on sphere.");
         const c = nodeMap.get(step.center);
         if (!c || c.kind !== "point") throw new Error("Circle center missing.");
         const centerPoint = doc.points.find((p) => p.id === c.id);
@@ -1352,7 +1482,7 @@ function applyCustomTool(state, geom, doc, tool, inputs, view) {
 
       if (step.kind === "point" && step.op === "point_fixed") {
         const isOutput = tool.output.kind === "point" && tool.output.nodeId === step.id;
-        if (geom === GeometryType.SPHERICAL) {
+        if (isSphere(geom)) {
           if (typeof step.z !== "number") throw new Error("Invalid spherical point.");
           const id = isOutput
             ? createSpherePoint(doc, { x: step.x, y: step.y, z: step.z }, undefined)
@@ -1378,7 +1508,7 @@ function applyCustomTool(state, geom, doc, tool, inputs, view) {
           { kind: b.kind, id: b.id },
         ];
 
-        if (geom === GeometryType.SPHERICAL) {
+        if (isSphere(geom)) {
           const planeA = getSpherePlaneFromConstraint(doc, constraints[0]);
           const planeB = getSpherePlaneFromConstraint(doc, constraints[1]);
           if (!planeA || !planeB) throw new Error("Invalid spherical constraints.");
@@ -1470,7 +1600,7 @@ function applyCustomTool(state, geom, doc, tool, inputs, view) {
         const c = nodeMap.get(step.curve);
         if (!c) throw new Error("Point-on input missing.");
         const constraint = { kind: c.kind, id: c.id };
-        if (geom === GeometryType.SPHERICAL) {
+        if (isSphere(geom)) {
           const plane = getSpherePlaneFromConstraint(doc, constraint);
           if (!plane) throw new Error("Invalid spherical curve.");
           const hit = step.sphereHint ? closestPointOnSpherePlaneCircle(step.sphereHint, plane) : defaultPointOnSpherePlane(plane);
@@ -1783,7 +1913,7 @@ function buildLineSideForStep(step, nodeMap, doc, geom) {
  * @returns {{centerA:{x:number,y:number}, centerB:{x:number,y:number}, sign:number} | null}
  */
 function buildCircleSideForStep(step, nodeMap, doc, geom) {
-  if (geom === GeometryType.SPHERICAL) return null;
+  if (isSphere(geom)) return null;
   if (!step.circleSide) return null;
   const aNode = nodeMap.get(step.a);
   const bNode = nodeMap.get(step.b);
@@ -2053,6 +2183,18 @@ function distanceToHyperboloidCurvePx(view, vp, posScreen, curve, geodesic) {
 }
 
 /**
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ * @param {{x:number,y:number}} posScreen
+ * @param {{normal:{x:number,y:number,z:number}, d:number}} plane
+ */
+function distanceToStereographicSphereCurvePx(view, posScreen, plane) {
+  const spherePts = sampleSpherePlanePoints(plane, 420);
+  /** @type {Array<{x:number,y:number} | null>} */
+  const screenPts = spherePts.map((p) => projectSphericalPointToStereographicScreen(view, p));
+  return distanceToScreenPolylineWithBreaks(posScreen, screenPts);
+}
+
+/**
  * @param {{x:number,y:number}} pos
  * @param {Array<{x:number,y:number}>} polyline
  */
@@ -2062,6 +2204,31 @@ function distanceToScreenPolyline(pos, polyline) {
   for (let i = 1; i < polyline.length; i++) {
     const d = distancePointToSegment(pos, polyline[i - 1], polyline[i]);
     if (d < best) best = d;
+  }
+  return best;
+}
+
+/**
+ * @param {{x:number,y:number}} pos
+ * @param {Array<{x:number,y:number} | null>} polyline
+ */
+function distanceToScreenPolylineWithBreaks(pos, polyline) {
+  let best = Infinity;
+  /** @type {{x:number,y:number} | null} */
+  let prev = null;
+  for (const curr of polyline) {
+    if (!curr) {
+      prev = null;
+      continue;
+    }
+    if (prev) {
+      const jump = Math.hypot(curr.x - prev.x, curr.y - prev.y);
+      if (jump <= 800) {
+        const d = distancePointToSegment(pos, prev, curr);
+        if (d < best) best = d;
+      }
+    }
+    prev = curr;
   }
   return best;
 }
@@ -2224,6 +2391,46 @@ function snapSpherePointToCurves(doc, view, vp, posScreen, p) {
     const proj = closestPointOnSpherePlaneCircle(p, plane);
     const vProj = rotateToView(view, proj);
     const sProj = projectSphere(vProj, vp);
+    const dPx = Math.hypot(sProj.x - posScreen.x, sProj.y - posScreen.y);
+    if (dPx <= bestDPx) {
+      bestDPx = dPx;
+      best = { point: proj, constraint };
+    }
+  };
+
+  for (const line of doc.lines) {
+    if (line.hidden) continue;
+    const plane = deriveSphereGreatCircle(doc, line);
+    if (!plane) continue;
+    considerPlane(plane, { kind: "line", id: line.id });
+  }
+  for (const circle of doc.circles) {
+    if (circle.hidden) continue;
+    const plane = deriveSphereCircle(doc, circle);
+    if (!plane) continue;
+    considerPlane(plane, { kind: "circle", id: circle.id });
+  }
+
+  return best;
+}
+
+/**
+ * @param {any} doc
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ * @param {{x:number,y:number}} posScreen
+ * @param {{x:number,y:number,z:number}} p
+ * @returns {{x:number,y:number,z:number} | null}
+ */
+function snapSpherePointToCurvesStereographic(doc, view, posScreen, p) {
+  const snapPx = 24;
+  /** @type {{point:{x:number,y:number,z:number}, constraint:{kind:"line"|"circle", id:string}} | null} */
+  let best = null;
+  let bestDPx = snapPx;
+
+  const considerPlane = (plane, constraint) => {
+    const proj = closestPointOnSpherePlaneCircle(p, plane);
+    const sProj = projectSphericalPointToStereographicScreen(view, proj);
+    if (!sProj) return;
     const dPx = Math.hypot(sProj.x - posScreen.x, sProj.y - posScreen.y);
     if (dPx <= bestDPx) {
       bestDPx = dPx;

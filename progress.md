@@ -38,6 +38,19 @@ Original prompt: OK, let's add some I/O. When you open up the history pane, ther
   - Hyperboloid supports rotate/zoom and click/drag via inverse projection to internal Poincare coordinates.
   - Curve hit-testing/snapping for Klein and Hyperboloid now use sampled screen-space distances.
 - Improved Geometry submenu usability by removing hover-gap dead zone between parent and child submenus and adding a hover bridge area in CSS.
+- Added spherical submodel `Spherical (Stereographic)` to the Geometry menu and hidden model select.
+- Added shared stereographic helpers (`src/engine/stereographic.js`) for sphere↔plane projection and spherical-plane sampling.
+- Added stereographic renderer path:
+  - white Euclidean-style plane
+  - fixed designated marker `S` at the model origin
+  - spherical lines/circles rendered via stereographic projection of spherical planes
+  - spherical points projected to the plane with labels/highlights.
+- Added stereographic input path:
+  - 2D pan/zoom controls (non-orbital)
+  - click/drag mapped through inverse stereographic projection to sphere points
+  - curve snapping and intersections for spherical objects in stereographic view.
+- Updated custom tool builder/execution to treat standard spherical and stereographic as the same spherical geometry class.
+- Added cross-model persistence for spherical family (`Standard` ↔ `Stereographic`) so constructions carry between both views.
 
 ## Notes
 - JavaScript runtime syntax check was not run because `node` is not available in the current environment.
@@ -50,3 +63,7 @@ Original prompt: OK, let's add some I/O. When you open up the history pane, ther
 - Manually verify all hyperbolic model switches preserve constructions in both directions:
   - Poincare ↔ Half-plane, Poincare ↔ Klein, Poincare ↔ Hyperboloid, and cross-pair routes.
 - Manually test custom tool application while in Klein and Hyperboloid models, especially intersection-heavy tools.
+- Manually verify stereographic behavior:
+  - switching `Spherical Standard` ↔ `Spherical Stereographic` preserves all objects
+  - stereographic click/drag/snap/intersect parity with standard spherical behavior
+  - custom tools built in one spherical submodel run correctly in the other.

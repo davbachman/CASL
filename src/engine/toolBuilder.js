@@ -1,5 +1,5 @@
 import { GeometryType } from "./state.js";
-import { derive2DCircleCurve, derive2DLineCurve } from "./geometry.js";
+import { derive2DCircleCurve, derive2DLineCurve, isSphere } from "./geometry.js";
 import { signedDistanceToCurve } from "./geom2d.js";
 import { norm3 } from "./vec3.js";
 
@@ -68,7 +68,7 @@ export function buildCustomToolDefinition(geom, doc, name, inputs, output) {
           }
         }
         const id = `n${nodeCounter++}`;
-        if (geom === GeometryType.SPHERICAL) {
+        if (isSphere(geom)) {
           if (point.z == null) throw new Error("Invalid spherical point.");
           const u = norm3({ x: point.x, y: point.y, z: point.z });
           steps.push({ id, kind: "point", op: "point_fixed", x: u.x, y: u.y, z: u.z });
@@ -99,7 +99,7 @@ export function buildCustomToolDefinition(geom, doc, name, inputs, output) {
         const circleConstraint = a.kind === "circle" ? a : b.kind === "circle" ? b : null;
         const lineConstraint = a.kind === "line" ? a : b.kind === "line" ? b : null;
         let pairRef = null;
-        if (geom !== GeometryType.SPHERICAL && circleConstraint && lineConstraint) {
+        if (!isSphere(geom) && circleConstraint && lineConstraint) {
           const circle = doc.circles.find((c) => c.id === circleConstraint.id);
           if (circle) {
             const centerPoint = doc.points.find((p) => p.id === circle.center);
@@ -138,7 +138,7 @@ export function buildCustomToolDefinition(geom, doc, name, inputs, output) {
           ...(avoidPointRef ? { avoidPointRef } : {}),
         });
         nodeMap.set(key, id);
-        if (geom !== GeometryType.SPHERICAL && circleConstraint && lineConstraint) {
+        if (!isSphere(geom) && circleConstraint && lineConstraint) {
           circleLineIntersectionRefs.set(circleConstraint.id, { pointId: point.id, nodeId: id });
         }
         return id;
@@ -188,7 +188,7 @@ export function buildCustomToolDefinition(geom, doc, name, inputs, output) {
       const radiusKey = refKey({ kind: "point", id: circle.radiusPoint });
 
       if (
-        geom !== GeometryType.SPHERICAL &&
+        !isSphere(geom) &&
         radiusPoint &&
         isFreePoint(radiusPoint) &&
         !inputMap.has(radiusKey)
@@ -242,7 +242,7 @@ function refKey(ref) {
  * @param {{x:number,y:number,z?:number}} point
  */
 function buildSingleCurveHint2D(geom, doc, constraint, point) {
-  if (geom === GeometryType.SPHERICAL) return null;
+  if (isSphere(geom)) return null;
   const curve = get2DCurveFromRef(geom, doc, constraint);
   if (!curve) return null;
   return curveHintForPoint(curve, point);
@@ -318,7 +318,7 @@ function lineParamOnCurve(line, p) {
  * @returns {{lineNodeId:string, refPointNodeId:string, value:number} | null}
  */
 function buildLineRefHint(geom, doc, point, a, b, aNode, bNode, buildNode) {
-  if (geom === GeometryType.SPHERICAL) return null;
+  if (isSphere(geom)) return null;
   const lineConstraint = a.kind === "line" ? a : b.kind === "line" ? b : null;
   const circleConstraint = a.kind === "circle" ? a : b.kind === "circle" ? b : null;
   if (!lineConstraint || !circleConstraint) return null;
@@ -349,7 +349,7 @@ function buildLineRefHint(geom, doc, point, a, b, aNode, bNode, buildNode) {
  * @returns {{lineNodeId:string, sign:number} | null}
  */
 function buildLineSideHint(geom, doc, point, a, b, buildNode) {
-  if (geom === GeometryType.SPHERICAL) return null;
+  if (isSphere(geom)) return null;
   const lineConstraint = a.kind === "line" ? a : b.kind === "line" ? b : null;
   const circleConstraint = a.kind === "circle" ? a : b.kind === "circle" ? b : null;
   if (!lineConstraint || !circleConstraint) return null;
@@ -392,7 +392,7 @@ function buildLineSideHint(geom, doc, point, a, b, buildNode) {
  * @returns {{sign:number} | null}
  */
 function buildCircleSideHint(geom, doc, point, a, b) {
-  if (geom === GeometryType.SPHERICAL) return null;
+  if (isSphere(geom)) return null;
   if (a.kind !== "circle" || b.kind !== "circle") return null;
   const circleA = doc.circles.find((c) => c.id === a.id);
   const circleB = doc.circles.find((c) => c.id === b.id);
@@ -471,7 +471,7 @@ function findCommonCircleConstraint(pA, pB) {
  * @returns {{curveNodeId: string, curveHint: {mode:"line"|"angle", value:number}} | null}
  */
 function buildPointOnInputCurveHint(geom, doc, point, inputs, buildNode) {
-  if (geom === GeometryType.SPHERICAL) return null;
+  if (isSphere(geom)) return null;
   let best = null;
   let bestDist = Infinity;
   for (const ref of inputs) {
@@ -508,7 +508,7 @@ function buildPointOnInputCurveHint(geom, doc, point, inputs, buildNode) {
  * @returns {{originNodeId: string, offset: number} | null}
  */
 function buildLineOffsetRefForRadiusPoint(geom, doc, point, lineRef, inputs, buildNode) {
-  if (geom === GeometryType.SPHERICAL) return null;
+  if (isSphere(geom)) return null;
   const circles = doc.circles.filter((c) => c.radiusPoint === point.id);
   if (circles.length === 0) return null;
   const inputPointIds = new Set(inputs.filter((r) => r.kind === "point").map((r) => r.id));
@@ -538,7 +538,7 @@ function buildLineOffsetRefForRadiusPoint(geom, doc, point, lineRef, inputs, bui
  * @returns {{pointNodeId: string} | null}
  */
 function buildAvoidPointRef(geom, doc, point, a, b, buildNode) {
-  if (geom === GeometryType.SPHERICAL) return null;
+  if (isSphere(geom)) return null;
   const lineRef = a.kind === "line" ? a : b.kind === "line" ? b : null;
   const circleRef = a.kind === "circle" ? a : b.kind === "circle" ? b : null;
   if (!lineRef || !circleRef) return null;

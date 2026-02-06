@@ -4,6 +4,7 @@ import { intersectCurves, lineThrough } from "./geom2d.js";
 import { samplePoincareCirclePoints, samplePoincareGeodesicPoints } from "./hyperbolicCurves.js";
 import { hyperbolicInternalToDisplay2D, hyperboloidToPoincare, poincareToHyperboloid, poincareToKlein } from "./hyperbolicModels.js";
 import { hyperboloidViewport } from "./hyperboloidView.js?v=20260206-64";
+import { sampleSpherePlanePoints, sphereToStereographic } from "./stereographic.js";
 import { initialize2DViewIfNeeded, worldToScreen } from "./view2d.js";
 import { projectSphere, rotateFromView, rotateToView } from "./sphereView.js";
 import { norm3 } from "./vec3.js";
@@ -57,6 +58,9 @@ export function createRenderer(canvas, state) {
 
     if (geom === GeometryType.SPHERICAL) {
       drawSphere(ctx, w, h, dpr, state, doc, /** @type {any} */ (view));
+    } else if (geom === GeometryType.SPHERICAL_STEREOGRAPHIC) {
+      initialize2DViewIfNeeded(/** @type {any} */ (view), w / dpr, h / dpr);
+      drawSphericalStereographic(ctx, w, h, dpr, state, doc, /** @type {any} */ (view));
     } else if (geom === GeometryType.HYPERBOLIC_HYPERBOLOID) {
       drawHyperboloid(ctx, w, h, dpr, state, doc, /** @type {any} */ (view));
     } else {
@@ -811,6 +815,89 @@ function drawSphere(ctx, w, h, dpr, state, doc, view) {
  * @param {number} dpr
  * @param {AppState} state
  * @param {any} doc
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ */
+function drawSphericalStereographic(ctx, w, h, dpr, state, doc, view) {
+  ctx.save();
+  ctx.scale(dpr, dpr);
+
+  const cssW = w / dpr;
+  const cssH = h / dpr;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  const s = worldToScreen(view, { x: 0, y: 0 });
+  ctx.fillStyle = "#111111";
+  ctx.beginPath();
+  ctx.arc(s.x, s.y, 4.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+  ctx.fillStyle = "rgba(0,0,0,0.8)";
+  ctx.fillText("S", s.x + 8, s.y - 8);
+
+  for (const circle of doc.circles) {
+    if (circle.hidden) continue;
+    const plane = deriveSphereCircle(doc, circle);
+    if (!plane) continue;
+    const isSelected =
+      isToolRefSelected(state, "circle", circle.id) ||
+      (state.pending?.tool === "intersect" &&
+        state.pending.firstObject.kind === "circle" &&
+        state.pending.firstObject.id === circle.id);
+    drawStereographicPlaneCurve(ctx, view, plane, circle.style, circle.label, isSelected, cssW, cssH);
+  }
+
+  for (const line of doc.lines) {
+    if (line.hidden) continue;
+    const plane = deriveSphereGreatCircle(doc, line);
+    if (!plane) continue;
+    const isSelected =
+      isToolRefSelected(state, "line", line.id) ||
+      (state.pending?.tool === "intersect" &&
+        state.pending.firstObject.kind === "line" &&
+        state.pending.firstObject.id === line.id);
+    drawStereographicPlaneCurve(ctx, view, plane, line.style, line.label, isSelected, cssW, cssH);
+  }
+
+  for (const p of doc.points) {
+    if (p.hidden) continue;
+    if (p.z == null) continue;
+    const screen = projectSphericalPointToStereographicScreen(view, p);
+    if (!screen) continue;
+    const highlight =
+      isToolRefSelected(state, "point", p.id) ||
+      (state.pending?.tool !== "intersect" && state.pending?.firstPointId === p.id);
+    ctx.save();
+    ctx.globalAlpha = p.style.opacity;
+    ctx.fillStyle = p.style.color;
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y, 4.2, 0, Math.PI * 2);
+    ctx.fill();
+    if (highlight) {
+      ctx.strokeStyle = "rgba(37,99,235,0.9)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, 9.2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.font =
+      "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+    ctx.fillStyle = "rgba(0,0,0,0.8)";
+    ctx.fillText(p.label, screen.x + 8, screen.y - 8);
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
+/**
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {number} w
+ * @param {number} h
+ * @param {number} dpr
+ * @param {AppState} state
+ * @param {any} doc
  * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
  */
 function drawHyperboloid(ctx, w, h, dpr, state, doc, view) {
@@ -1230,6 +1317,34 @@ function drawSpherePlaneCurve(ctx, view, vp, plane, style, label, isSelected) {
 
 /**
  * @param {CanvasRenderingContext2D} ctx
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ * @param {{normal:{x:number,y:number,z:number}, d:number}} plane
+ * @param {{color:string,opacity:number}} style
+ * @param {string} label
+ * @param {boolean} isSelected
+ * @param {number} cssW
+ * @param {number} cssH
+ */
+function drawStereographicPlaneCurve(ctx, view, plane, style, label, isSelected, cssW, cssH) {
+  ctx.save();
+  ctx.globalAlpha = style.opacity;
+  ctx.strokeStyle = style.color;
+  ctx.lineWidth = isSelected ? 3 : 2;
+
+  const spherePts = sampleSpherePlanePoints(plane, 440);
+  const screenPts = spherePts.map((p) => projectSphericalPointToStereographicScreen(view, p));
+  drawScreenPolylineWithBreaks(ctx, screenPts, Math.max(cssW, cssH) * 0.6);
+
+  const finite = screenPts.filter((p) => !!p);
+  if (finite.length > 0) {
+    const labelPoint = finite[Math.floor(finite.length / 2)];
+    drawCurveLabel(ctx, label, labelPoint.x, labelPoint.y);
+  }
+  ctx.restore();
+}
+
+/**
+ * @param {CanvasRenderingContext2D} ctx
  * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
  * @param {{cx:number, cy:number, r:number}} vp
  * @param {{id:string,label:string,x:number,y:number,z:number,style:{color:string,opacity:number},locked?:boolean}} p
@@ -1290,4 +1405,54 @@ function drawPolylineMasked(ctx, pts, frontMask, wantFront) {
     }
   }
   if (started) ctx.stroke();
+}
+
+/**
+ * Draw screen-space polyline while splitting at singular jumps.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {Array<{x:number,y:number} | null>} pts
+ * @param {number} maxJumpPx
+ */
+function drawScreenPolylineWithBreaks(ctx, pts, maxJumpPx) {
+  let started = false;
+  /** @type {{x:number,y:number} | null} */
+  let prev = null;
+  for (const p of pts) {
+    if (!p) {
+      if (started) ctx.stroke();
+      started = false;
+      prev = null;
+      continue;
+    }
+    if (!started) {
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      started = true;
+      prev = p;
+      continue;
+    }
+    const jump = prev ? Math.hypot(p.x - prev.x, p.y - prev.y) : 0;
+    if (jump > maxJumpPx) {
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      prev = p;
+      continue;
+    }
+    ctx.lineTo(p.x, p.y);
+    prev = p;
+  }
+  if (started) ctx.stroke();
+}
+
+/**
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ * @param {{x:number,y:number,z:number}} p
+ * @returns {{x:number,y:number} | null}
+ */
+function projectSphericalPointToStereographicScreen(view, p) {
+  const plane = sphereToStereographic(p);
+  if (!plane) return null;
+  return worldToScreen(view, plane);
 }

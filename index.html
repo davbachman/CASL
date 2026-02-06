@@ -45,6 +45,14 @@
                   <button class="menu-item menu-subitem" type="button" data-action="set-model" data-geometry="spherical">
                     Standard
                   </button>
+                  <button
+                    class="menu-item menu-subitem"
+                    type="button"
+                    data-action="set-model"
+                    data-geometry="spherical_stereographic"
+                  >
+                    Stereographic
+                  </button>
                 </div>
               </div>
               <div class="menu-submenu">
@@ -111,6 +119,7 @@
             <option value="euclidean" selected>Euclidean</option>
             <option value="inversive_euclidean">Inversive Euclidean</option>
             <option value="spherical">Spherical</option>
+            <option value="spherical_stereographic">Spherical (Stereographic)</option>
             <option value="hyperbolic_poincare">Hyperbolic (Poincar&eacute; disk)</option>
             <option value="hyperbolic_half_plane">Hyperbolic (Half-plane)</option>
             <option value="hyperbolic_klein">Hyperbolic (Klein)</option>
@@ -175,6 +184,6 @@
       accept="application/json,.json"
     />
 
-    <script type="module" src="./src/main.js?v=20260206-64"></script>
+    <script type="module" src="./src/main.js?v=20260206-65"></script>
   </body>
 </html>

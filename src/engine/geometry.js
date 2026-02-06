@@ -13,7 +13,7 @@ import { cross3, dot3, len3, norm3 } from "./vec3.js";
  * @returns {boolean}
  */
 export function isSphere(geom) {
-  return geom === GeometryType.SPHERICAL;
+  return geom === GeometryType.SPHERICAL || geom === GeometryType.SPHERICAL_STEREOGRAPHIC;
 }
 
 /** @param {{x:number,y:number}} p */
