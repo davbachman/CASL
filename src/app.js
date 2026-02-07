@@ -1,6 +1,6 @@
 import { GeometryType, ToolType, createDefaultView, createEmptyDoc, createInitialState } from "./engine/state.js";
 import { createHistory } from "./engine/history.js";
-import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260206-65";
+import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260206-69";
 import {
   hyperbolicInternalToDisplay2D,
   hyperbolicToPoincarePoint,
@@ -8,8 +8,8 @@ import {
   poincareToHyperbolicPoint,
 } from "./engine/hyperbolicModels.js";
 import { installContextMenu } from "./ui/contextMenu.js";
-import { attachCanvasController } from "./engine/inputController.js?v=20260206-65";
-import { createRenderer } from "./engine/renderer.js?v=20260206-65";
+import { attachCanvasController } from "./engine/inputController.js?v=20260206-69";
+import { createRenderer } from "./engine/renderer.js?v=20260206-69";
 import { makeId } from "./engine/util/ids.js";
 
 /**
@@ -1004,11 +1004,14 @@ function convertDocForModelSwitch(from, to, sourceDoc, targetDoc) {
   if (from === to) return null;
   if (!isCrossModelConvertible(from, to)) return null;
 
-  if (from === GeometryType.EUCLIDEAN && to === GeometryType.INVERSIVE_EUCLIDEAN) {
+  if (isPlainEuclideanModel(from) && to === GeometryType.INVERSIVE_EUCLIDEAN) {
     return convertEuclideanToInversiveDoc(sourceDoc, targetDoc);
   }
-  if (from === GeometryType.INVERSIVE_EUCLIDEAN && to === GeometryType.EUCLIDEAN) {
+  if (from === GeometryType.INVERSIVE_EUCLIDEAN && isPlainEuclideanModel(to)) {
     return convertInversiveToEuclideanDoc(sourceDoc);
+  }
+  if (isPlainEuclideanModel(from) && isPlainEuclideanModel(to)) {
+    return safeClone(sourceDoc);
   }
   if (isHyperbolicGeometry(from) && isHyperbolicGeometry(to)) {
     return convertHyperbolicDoc(sourceDoc, from, to);
@@ -1024,12 +1027,20 @@ function convertDocForModelSwitch(from, to, sourceDoc, targetDoc) {
  * @param {GeometryType} to
  */
 function isCrossModelConvertible(from, to) {
-  const euclideanFamily =
-    (from === GeometryType.EUCLIDEAN || from === GeometryType.INVERSIVE_EUCLIDEAN) &&
-    (to === GeometryType.EUCLIDEAN || to === GeometryType.INVERSIVE_EUCLIDEAN);
+  const euclideanFamily = isEuclideanFamilyModel(from) && isEuclideanFamilyModel(to);
   const sphericalFamily = isSphericalModel(from) && isSphericalModel(to);
   const hyperbolicFamily = isHyperbolicGeometry(from) && isHyperbolicGeometry(to);
   return euclideanFamily || sphericalFamily || hyperbolicFamily;
+}
+
+/** @param {GeometryType} geom */
+function isPlainEuclideanModel(geom) {
+  return geom === GeometryType.EUCLIDEAN || geom === GeometryType.EUCLIDEAN_PERSPECTIVE;
+}
+
+/** @param {GeometryType} geom */
+function isEuclideanFamilyModel(geom) {
+  return isPlainEuclideanModel(geom) || geom === GeometryType.INVERSIVE_EUCLIDEAN;
 }
 
 /** @param {GeometryType} geom */
@@ -1304,6 +1315,11 @@ function fit2DViewToDoc(canvas, view, geom, doc) {
       view.offsetY = height / 2;
       // @ts-ignore - runtime extension set in view2d initializer
       view.initialized = true;
+    } else if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+      view.offsetX = width / 2;
+      view.offsetY = height * 0.35;
+      // @ts-ignore - runtime extension set in view2d initializer
+      view.initialized = true;
     }
     return;
   }
@@ -1350,6 +1366,8 @@ function geometryDisplayName(geom) {
   switch (geom) {
     case GeometryType.EUCLIDEAN:
       return "Euclidean";
+    case GeometryType.EUCLIDEAN_PERSPECTIVE:
+      return "Euclidean (Perspective)";
     case GeometryType.INVERSIVE_EUCLIDEAN:
       return "Inversive Euclidean";
     case GeometryType.SPHERICAL:

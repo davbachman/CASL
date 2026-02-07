@@ -1,4 +1,4 @@
-import { createApp } from "./app.js?v=20260206-65";
+import { createApp } from "./app.js?v=20260206-69";
 
 const deps = {
   canvas: /** @type {HTMLCanvasElement} */ (document.getElementById("canvas")),

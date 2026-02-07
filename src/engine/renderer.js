@@ -4,6 +4,7 @@ import { intersectCurves, lineThrough } from "./geom2d.js";
 import { samplePoincareCirclePoints, samplePoincareGeodesicPoints } from "./hyperbolicCurves.js";
 import { hyperbolicInternalToDisplay2D, hyperboloidToPoincare, poincareToHyperboloid, poincareToKlein } from "./hyperbolicModels.js";
 import { hyperboloidViewport } from "./hyperboloidView.js?v=20260206-64";
+import { perspectiveDisplayLineFromWorldLine, perspectiveWorldToDisplay } from "./perspectiveView.js?v=20260206-69";
 import { sampleSpherePlanePoints, sphereToStereographic } from "./stereographic.js";
 import { initialize2DViewIfNeeded, worldToScreen } from "./view2d.js";
 import { projectSphere, rotateFromView, rotateToView } from "./sphereView.js";
@@ -68,7 +69,11 @@ export function createRenderer(canvas, state) {
         /** @type {any} */ (view),
         w / dpr,
         h / dpr,
-        geom === GeometryType.HYPERBOLIC_HALF_PLANE ? { offsetY: (h / dpr) * 0.78 } : undefined,
+        geom === GeometryType.HYPERBOLIC_HALF_PLANE
+          ? { offsetY: (h / dpr) * 0.78 }
+          : geom === GeometryType.EUCLIDEAN_PERSPECTIVE
+            ? { offsetY: (h / dpr) * 0.35 }
+            : undefined,
       );
       draw2D(ctx, w, h, dpr, state, doc, /** @type {any} */ (view), geom);
     }
@@ -134,6 +139,28 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
     ctx.moveTo(0, y0);
     ctx.lineTo(w / dpr, y0);
     ctx.stroke();
+  } else if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    const y0 = view.offsetY;
+    ctx.fillStyle = "#edf2fb";
+    ctx.fillRect(0, 0, w / dpr, Math.max(0, y0));
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, y0, w / dpr, h / dpr - y0);
+    ctx.strokeStyle = "rgba(0,0,0,0.75)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, y0);
+    ctx.lineTo(w / dpr, y0);
+    ctx.stroke();
+  }
+
+  let clippedPerspective = false;
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    clippedPerspective = true;
+    const y0 = view.offsetY;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, y0, w / dpr, h / dpr - y0);
+    ctx.clip();
   }
 
   // Draw curves (lines/circles)
@@ -207,6 +234,17 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
     draw2DPoint(ctx, view, geom, p, highlight);
   }
 
+  if (clippedPerspective) {
+    ctx.restore();
+    const y0 = view.offsetY;
+    ctx.strokeStyle = "rgba(0,0,0,0.75)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, y0);
+    ctx.lineTo(w / dpr, y0);
+    ctx.stroke();
+  }
+
   ctx.restore();
 }
 
@@ -227,6 +265,42 @@ function draw2DCircleObject(ctx, view, geom, curve, style, label, isSelected, cs
   ctx.globalAlpha = style.opacity;
   ctx.strokeStyle = style.color;
   ctx.lineWidth = isSelected ? 3 : 2;
+
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    if (curve.kind === "line") {
+      const dLine = perspectiveDisplayLineFromWorldLine(curve);
+      if (dLine) {
+        const seg = clipLineToView(dLine, view, cssW, cssH);
+        if (seg) {
+          const a = worldToScreen(view, seg.a);
+          const b = worldToScreen(view, seg.b);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+          const lab = labelAnchorWorld
+            ? perspectiveWorldToScreen(view, labelAnchorWorld)
+            : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+          if (lab) drawCurveLabel(ctx, label, lab.x, lab.y);
+        }
+      }
+      ctx.restore();
+      return;
+    }
+    const steps = 300;
+    /** @type {Array<{x:number,y:number} | null>} */
+    const pts = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = (i / steps) * Math.PI * 2;
+      const w = { x: curve.cx + curve.r * Math.cos(t), y: curve.cy + curve.r * Math.sin(t) };
+      pts.push(perspectiveWorldToScreen(view, w));
+    }
+    drawScreenPolylineWithBreaks(ctx, pts, Math.max(cssW, cssH) * 0.8);
+    const lab = labelAnchorWorld ? perspectiveWorldToScreen(view, labelAnchorWorld) : findMidScreenPoint(pts);
+    if (lab) drawCurveLabel(ctx, label, lab.x, lab.y);
+    ctx.restore();
+    return;
+  }
 
   if (geom === GeometryType.HYPERBOLIC_KLEIN) {
     const points =
@@ -304,6 +378,43 @@ function draw2DLineObject(
   ctx.globalAlpha = style.opacity;
   ctx.strokeStyle = style.color;
   ctx.lineWidth = isSelected ? 3 : 2;
+
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    if (curve.kind === "line") {
+      const dLine = perspectiveDisplayLineFromWorldLine(curve);
+      if (dLine) {
+        const seg = clipLineToView(dLine, view, cssW, cssH);
+        if (seg) {
+          const a = worldToScreen(view, seg.a);
+          const b = worldToScreen(view, seg.b);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+          const lab = labelAnchorWorld
+            ? perspectiveWorldToScreen(view, labelAnchorWorld)
+            : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+          if (lab) drawCurveLabel(ctx, label, lab.x, lab.y);
+        }
+      }
+      ctx.restore();
+      return;
+    }
+
+    const steps = 320;
+    /** @type {Array<{x:number,y:number} | null>} */
+    const pts = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = (i / steps) * Math.PI * 2;
+      const w = { x: curve.cx + curve.r * Math.cos(t), y: curve.cy + curve.r * Math.sin(t) };
+      pts.push(perspectiveWorldToScreen(view, w));
+    }
+    drawScreenPolylineWithBreaks(ctx, pts, Math.max(cssW, cssH) * 0.8);
+    const lab = labelAnchorWorld ? perspectiveWorldToScreen(view, labelAnchorWorld) : findMidScreenPoint(pts);
+    if (lab) drawCurveLabel(ctx, label, lab.x, lab.y);
+    ctx.restore();
+    return;
+  }
 
   if (geom === GeometryType.HYPERBOLIC_KLEIN) {
     const seg = kleinGeodesicSegment(curve, definingPointsWorld);
@@ -420,8 +531,8 @@ function draw2DLineObject(
  * @param {boolean} highlight
  */
 function draw2DPoint(ctx, view, geom, p, highlight) {
-  const drawPos = geom === GeometryType.HYPERBOLIC_KLEIN ? poincareToKlein({ x: p.x, y: p.y }) : { x: p.x, y: p.y };
-  const s = worldToScreen(view, drawPos);
+  const s = project2DPointToScreen(view, geom, { x: p.x, y: p.y });
+  if (!s) return;
   ctx.save();
   ctx.globalAlpha = p.style.opacity;
   ctx.fillStyle = p.style.color;
@@ -1444,6 +1555,65 @@ function drawScreenPolylineWithBreaks(ctx, pts, maxJumpPx) {
     prev = p;
   }
   if (started) ctx.stroke();
+}
+
+/**
+ * @param {any} view
+ * @param {GeometryType} geom
+ * @param {{x:number,y:number}} p
+ * @returns {{x:number,y:number} | null}
+ */
+function project2DPointToScreen(view, geom, p) {
+  if (geom === GeometryType.HYPERBOLIC_KLEIN) {
+    return worldToScreen(view, poincareToKlein(p));
+  }
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    return perspectiveWorldToScreen(view, p);
+  }
+  return worldToScreen(view, p);
+}
+
+/**
+ * @param {any} view
+ * @param {{x:number,y:number}} p
+ * @returns {{x:number,y:number} | null}
+ */
+function perspectiveWorldToScreen(view, p) {
+  const d = perspectiveWorldToDisplay(p);
+  if (!d) return null;
+  return worldToScreen(view, d);
+}
+
+/**
+ * @param {any} view
+ * @param {{kind:"line",a:number,b:number,c:number}} line
+ * @param {number} extent
+ * @param {number} steps
+ * @returns {Array<{x:number,y:number} | null>}
+ */
+function samplePerspectiveLineScreenPoints(view, line, extent, steps) {
+  const n2 = line.a * line.a + line.b * line.b;
+  if (!(n2 > 1e-12)) return [];
+  const base = { x: -line.a * line.c / n2, y: -line.b * line.c / n2 };
+  const dir = { x: -line.b, y: line.a };
+  /** @type {Array<{x:number,y:number} | null>} */
+  const out = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = -extent + (2 * extent * i) / steps;
+    const w = { x: base.x + dir.x * t, y: base.y + dir.y * t };
+    out.push(perspectiveWorldToScreen(view, w));
+  }
+  return out;
+}
+
+/**
+ * @param {Array<{x:number,y:number} | null>} pts
+ * @returns {{x:number,y:number} | null}
+ */
+function findMidScreenPoint(pts) {
+  const finite = pts.filter((p) => !!p);
+  if (finite.length === 0) return null;
+  return finite[Math.floor(finite.length / 2)];
 }
 
 /**

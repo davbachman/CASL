@@ -4,6 +4,7 @@ import { clamp } from "./util/math.js";
 
 export const GeometryType = /** @type {const} */ ({
   EUCLIDEAN: "euclidean",
+  EUCLIDEAN_PERSPECTIVE: "euclidean_perspective",
   INVERSIVE_EUCLIDEAN: "inversive_euclidean",
   SPHERICAL: "spherical",
   SPHERICAL_STEREOGRAPHIC: "spherical_stereographic",

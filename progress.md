@@ -51,6 +51,12 @@ Original prompt: OK, let's add some I/O. When you open up the history pane, ther
   - curve snapping and intersections for spherical objects in stereographic view.
 - Updated custom tool builder/execution to treat standard spherical and stereographic as the same spherical geometry class.
 - Added cross-model persistence for spherical family (`Standard` ↔ `Stereographic`) so constructions carry between both views.
+- Added Euclidean submodel `Perspective`:
+  - Geometry menu option under Euclidean and hidden select option.
+  - Horizon-line rendering with white construction region below and sky tint above.
+  - Construction drawing clipped to the region below the horizon.
+  - Point/domain constraints enforced to the below-horizon half-plane.
+  - Euclidean-family model switching now includes `Perspective` (identity with standard Euclidean, plus inversive conversion paths preserved).
 
 ## Notes
 - JavaScript runtime syntax check was not run because `node` is not available in the current environment.

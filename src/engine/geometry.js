@@ -85,6 +85,9 @@ export function constrain2DPoint(geom, p) {
   if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) {
     if (p.y <= 0) return { x: p.x, y: 1e-6 };
   }
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    if (p.y >= 0) return { x: p.x, y: -1e-6 };
+  }
   return p;
 }
 
@@ -230,6 +233,7 @@ export function derive2DCircleCurve(geom, doc, circle) {
 export function is2DPointInDomain(geom, p) {
   if (usesPoincareInternalChart(geom)) return p.x * p.x + p.y * p.y < 1 - 1e-9;
   if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) return p.y > 1e-9;
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) return p.y < -1e-9;
   return true;
 }
 

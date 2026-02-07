@@ -33,6 +33,14 @@
                     class="menu-item menu-subitem"
                     type="button"
                     data-action="set-model"
+                    data-geometry="euclidean_perspective"
+                  >
+                    Perspective
+                  </button>
+                  <button
+                    class="menu-item menu-subitem"
+                    type="button"
+                    data-action="set-model"
                     data-geometry="inversive_euclidean"
                   >
                     Inversive
@@ -117,6 +125,7 @@
           <label class="menu-label" for="geometrySelect">Geometry</label>
           <select id="geometrySelect" class="menu-select">
             <option value="euclidean" selected>Euclidean</option>
+            <option value="euclidean_perspective">Euclidean (Perspective)</option>
             <option value="inversive_euclidean">Inversive Euclidean</option>
             <option value="spherical">Spherical</option>
             <option value="spherical_stereographic">Spherical (Stereographic)</option>
@@ -184,6 +193,6 @@
       accept="application/json,.json"
     />
 
-    <script type="module" src="./src/main.js?v=20260206-65"></script>
+    <script type="module" src="./src/main.js?v=20260206-69"></script>
   </body>
 </html>

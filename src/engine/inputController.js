@@ -13,6 +13,11 @@ import { intersectCurves, signedDistanceToCurve } from "./geom2d.js";
 import { samplePoincareCirclePoints, samplePoincareGeodesicPoints } from "./hyperbolicCurves.js";
 import { hyperbolicDisplay2DToInternal, hyperbolicInternalToDisplay2D } from "./hyperbolicModels.js";
 import { hyperboloidViewport, projectPoincareOnHyperboloid, screenToHyperboloidPoincare } from "./hyperboloidView.js?v=20260206-64";
+import {
+  perspectiveDisplayLineFromWorldLine,
+  perspectiveDisplayToWorld,
+  perspectiveWorldToDisplay,
+} from "./perspectiveView.js?v=20260206-69";
 import { sampleSpherePlanePoints, sphereToStereographic, stereographicToSphere } from "./stereographic.js";
 import { makeId } from "./util/ids.js";
 import { initialize2DViewIfNeeded, pan2D, screenToWorld, worldToScreen, zoom2DAt } from "./view2d.js";
@@ -64,7 +69,11 @@ export function attachCanvasController(canvas, deps) {
       /** @type {any} */ (view),
       rect.width,
       rect.height,
-      geom === GeometryType.HYPERBOLIC_HALF_PLANE ? { offsetY: rect.height * 0.78 } : undefined,
+      geom === GeometryType.HYPERBOLIC_HALF_PLANE
+        ? { offsetY: rect.height * 0.78 }
+        : geom === GeometryType.EUCLIDEAN_PERSPECTIVE
+          ? { offsetY: rect.height * 0.35 }
+          : undefined,
     );
   };
 
@@ -316,11 +325,8 @@ function hitTestPoint(state, geom, pos, canvas) {
   let bestD = Infinity;
   for (const pt of doc.points) {
     if (pt.hidden) continue;
-    const drawPoint =
-      geom === GeometryType.HYPERBOLIC_KLEIN
-        ? hyperbolicInternalToDisplay2D(geom, { x: pt.x, y: pt.y })
-        : { x: pt.x, y: pt.y };
-    const s = worldToScreen(v2d, drawPoint);
+    const s = projectModelPointToScreen2D(geom, v2d, { x: pt.x, y: pt.y });
+    if (!s) continue;
     const d = Math.hypot(s.x - pos.x, s.y - pos.y);
     if (d < bestD) {
       bestD = d;
@@ -419,6 +425,33 @@ function hitTestCurve(state, geom, pos, canvas) {
       const curve = derive2DCircleCurve(geom, doc, circle);
       if (!curve) continue;
       const dPx = distanceToHyperboloidCurvePx(/** @type {any} */ (view), vp, pos, curve, false);
+      if (dPx < bestDPx) {
+        bestDPx = dPx;
+        best = { kind: "circle", id: circle.id };
+      }
+    }
+    return best;
+  }
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    const v2d = /** @type {any} */ (view);
+    /** @type {null | {kind:"line"|"circle", id:string}} */
+    let best = null;
+    let bestDPx = thresholdPx;
+    for (const line of doc.lines) {
+      if (line.hidden) continue;
+      const curve = derive2DLineCurve(geom, doc, line);
+      if (!curve) continue;
+      const dPx = distanceToPerspectiveCurvePx(v2d, pos, curve);
+      if (dPx < bestDPx) {
+        bestDPx = dPx;
+        best = { kind: "line", id: line.id };
+      }
+    }
+    for (const circle of doc.circles) {
+      if (circle.hidden) continue;
+      const curve = derive2DCircleCurve(geom, doc, circle);
+      if (!curve) continue;
+      const dPx = distanceToPerspectiveCurvePx(v2d, pos, curve);
       if (dPx < bestDPx) {
         bestDPx = dPx;
         best = { kind: "circle", id: circle.id };
@@ -898,7 +931,7 @@ function filterNew2DPoints(geom, doc, view, hits, thresholdPx, canvas) {
       const drawPoint = hyperbolicInternalToDisplay2D(geom, p);
       return worldToScreen(/** @type {any} */ (view), drawPoint);
     }
-    return worldToScreen(/** @type {any} */ (view), p);
+    return projectModelPointToScreen2D(geom, /** @type {any} */ (view), p);
   };
 
   /** @type {{x:number,y:number}[]} */
@@ -2085,6 +2118,9 @@ function enforceSphereConstraints(doc) {
  */
 function screenToModelPoint2D(geom, view, pos) {
   const raw = screenToWorld(view, pos);
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    return perspectiveDisplayToWorld(raw);
+  }
   if (geom === GeometryType.HYPERBOLIC_KLEIN) {
     return hyperbolicDisplay2DToInternal(geom, raw);
   }
@@ -2100,6 +2136,11 @@ function screenToModelPoint2D(geom, view, pos) {
  * @returns {{x:number,y:number} | null}
  */
 function projectModelPointToScreen2D(geom, view, p) {
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    const display = perspectiveWorldToDisplay(p);
+    if (!display) return null;
+    return worldToScreen(view, display);
+  }
   if (geom === GeometryType.HYPERBOLIC_KLEIN) {
     const display = hyperbolicInternalToDisplay2D(geom, p);
     return worldToScreen(view, display);
@@ -2180,6 +2221,33 @@ function distanceToHyperboloidCurvePx(view, vp, posScreen, curve, geodesic) {
     screenPts.push({ x: s.x, y: s.y });
   }
   return distanceToScreenPolyline(posScreen, screenPts);
+}
+
+/**
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ * @param {{x:number,y:number}} posScreen
+ * @param {import("./geom2d.js").Curve2D} curve
+ */
+function distanceToPerspectiveCurvePx(view, posScreen, curve) {
+  if (curve.kind === "line") {
+    const dLine = perspectiveDisplayLineFromWorldLine(curve);
+    if (!dLine) return Infinity;
+    const p = screenToWorld(view, posScreen);
+    const n = Math.hypot(dLine.a, dLine.b);
+    if (!(n > 1e-12)) return Infinity;
+    const dWorld = Math.abs((dLine.a * p.x + dLine.b * p.y + dLine.c) / n);
+    return dWorld * view.scale;
+  }
+
+  /** @type {Array<{x:number,y:number} | null>} */
+  const screenPts = [];
+  const steps = 280;
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * Math.PI * 2;
+    const w = { x: curve.cx + curve.r * Math.cos(t), y: curve.cy + curve.r * Math.sin(t) };
+    screenPts.push(projectModelPointToScreen2D(GeometryType.EUCLIDEAN_PERSPECTIVE, view, w));
+  }
+  return distanceToScreenPolylineWithBreaks(posScreen, screenPts);
 }
 
 /**
