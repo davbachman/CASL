@@ -1,15 +1,15 @@
 import { GeometryType, ToolType, createDefaultView, createEmptyDoc, createInitialState } from "./engine/state.js";
 import { createHistory } from "./engine/history.js";
-import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260206-69";
+import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260207-80";
 import {
   hyperbolicInternalToDisplay2D,
   hyperbolicToPoincarePoint,
   isHyperbolicGeometry,
   poincareToHyperbolicPoint,
-} from "./engine/hyperbolicModels.js";
+} from "./engine/hyperbolicModels.js?v=20260207-80";
 import { installContextMenu } from "./ui/contextMenu.js";
-import { attachCanvasController } from "./engine/inputController.js?v=20260206-69";
-import { createRenderer } from "./engine/renderer.js?v=20260206-69";
+import { attachCanvasController } from "./engine/inputController.js?v=20260207-80";
+import { createRenderer } from "./engine/renderer.js?v=20260207-80";
 import { makeId } from "./engine/util/ids.js";
 
 /**
@@ -151,6 +151,11 @@ export function createApp(deps) {
       return;
     }
 
+    if (!state.activeTool) {
+      deps.toolHint.textContent = `${geomLabel}: Select a geometry element, then press Delete to remove it.`;
+      return;
+    }
+
     const hint =
       state.activeTool === "point"
         ? "Create a new point"
@@ -199,7 +204,7 @@ export function createApp(deps) {
     if (!(target instanceof HTMLElement)) return;
     const tool = target.dataset.tool;
     if (!tool) return;
-    state.activeTool = tool;
+    state.activeTool = state.activeTool === tool ? "" : tool;
     state.pending = null;
     state.selection = null;
     state.toolUse = null;
@@ -207,7 +212,7 @@ export function createApp(deps) {
     state.toolBuilder = null;
     state.toolUseError = null;
     ctxMenu.close();
-    setActiveToolButton(tool);
+    setActiveToolButton(state.activeTool);
     updateToolHint();
     renderer.requestRender(true);
   };
@@ -244,6 +249,69 @@ export function createApp(deps) {
   };
 
   deps.clearButton.addEventListener("click", doClear);
+
+  const doDeleteSelection = () => {
+    const selection = state.selection;
+    if (!selection) return;
+    const doc = state.docs[state.activeGeometry];
+    if (!selectionExistsInDoc(doc, selection)) {
+      state.selection = null;
+      renderer.requestRender(true);
+      return;
+    }
+    if (selection.kind === "point") {
+      const point = doc.points.find((p) => p.id === selection.id);
+      if (point?.locked) return;
+    }
+    ctxMenu.close();
+    state.pending = null;
+    state.toolUse = null;
+    state.toolUseError = null;
+    state.toolBuilder = null;
+    history.push(state.activeGeometry);
+    const removed = removeSelectionCascadeFromDoc(doc, selection);
+    if (!removed) {
+      history.undo(state.activeGeometry);
+      return;
+    }
+    state.selection = null;
+    ensureInversiveInfinityPoint(state);
+    updateUndoButton();
+    updateToolHint();
+    renderer.requestRender(true);
+  };
+
+  const doReset = () => {
+    const confirmed = window.confirm("Are you sure? All work will be lost.");
+    if (!confirmed) return;
+    ctxMenu.close();
+    state.activeGeometry = GeometryType.EUCLIDEAN;
+    state.activeTool = ToolType.LINE;
+    state.pending = null;
+    state.selection = null;
+    state.toolUse = null;
+    state.toolUseError = null;
+    state.toolBuilder = null;
+    state.customTools = [];
+    state.nextToolId = 1;
+    state.showSteps = false;
+    for (const geom of Object.values(GeometryType)) {
+      state.docs[geom] = createEmptyDoc(/** @type {GeometryType} */ (geom));
+      state.views[geom] = createDefaultView(/** @type {GeometryType} */ (geom));
+      enforceHyperboloidAxis(state.views[geom], /** @type {GeometryType} */ (geom));
+      history.clear(/** @type {GeometryType} */ (geom));
+    }
+    ensureInversiveInfinityPoint(state);
+    deps.geometrySelect.value = state.activeGeometry;
+    setActiveToolButton(state.activeTool);
+    renderCustomTools();
+    updateDebugVisibility();
+    updateShowStepsButton();
+    updateToolHint();
+    updateUndoButton();
+    lastHistorySignature = "";
+    renderer.requestRender(true);
+  };
 
   const setShowSteps = (show) => {
     if (state.showSteps === show) return;
@@ -451,11 +519,19 @@ export function createApp(deps) {
 
   window.addEventListener("keydown", (e) => {
     if (isEditableTarget(e.target)) return;
+    if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      doDeleteSelection();
+      return;
+    }
     if (state.toolBuilder) {
       if (e.key === "Escape") {
         state.toolBuilder = null;
+        state.pending = null;
+        state.toolUse = null;
         state.toolUseError = null;
         updateToolHint();
+        setActiveToolButton(state.activeTool);
         renderer.requestRender(true);
         return;
       }
@@ -540,7 +616,9 @@ export function createApp(deps) {
 
   return {
     undo: doUndo,
+    deleteSelection: doDeleteSelection,
     clear: doClear,
+    reset: doReset,
     saveTools,
     importTools: openImportToolsDialog,
     saveConstruction,
@@ -1256,6 +1334,96 @@ function extractNumericId(id) {
 }
 
 /**
+ * Delete the selected object and everything created after it.
+ *
+ * @param {import("./engine/state.js").ConstructionDoc} doc
+ * @param {{kind:"point"|"line"|"circle", id:string}} selection
+ * @returns {boolean}
+ */
+function removeSelectionCascadeFromDoc(doc, selection) {
+  if (!doc || !selection?.id) return false;
+
+  /** @type {Set<string>} */
+  const removePoints = new Set();
+  /** @type {Set<string>} */
+  const removeLines = new Set();
+  /** @type {Set<string>} */
+  const removeCircles = new Set();
+
+  const addByRef = (ref) => {
+    if (ref.kind === "point") removePoints.add(ref.id);
+    else if (ref.kind === "line") removeLines.add(ref.id);
+    else removeCircles.add(ref.id);
+  };
+  addByRef(selection);
+
+  const selectedOrder = extractNumericId(selection.id);
+  if (selectedOrder > 0) {
+    for (const p of doc.points ?? []) {
+      if (extractNumericId(p.id) >= selectedOrder) removePoints.add(p.id);
+    }
+    for (const l of doc.lines ?? []) {
+      if (extractNumericId(l.id) >= selectedOrder) removeLines.add(l.id);
+    }
+    for (const c of doc.circles ?? []) {
+      if (extractNumericId(c.id) >= selectedOrder) removeCircles.add(c.id);
+    }
+  }
+
+  const steps = Array.isArray(doc.historySteps) ? doc.historySteps : [];
+  let startIndex = -1;
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const created =
+      step.type === "point"
+        ? { kind: "point", id: step.pointId }
+        : step.type === "line"
+          ? { kind: "line", id: step.lineId }
+          : step.type === "circle"
+            ? { kind: "circle", id: step.circleId }
+            : step.type === "intersection"
+              ? { kind: "point", id: step.pointId }
+              : step.type === "tool"
+                ? step.output
+                : null;
+    if (!created) continue;
+    if (created.kind === selection.kind && created.id === selection.id) {
+      startIndex = i;
+      break;
+    }
+  }
+  if (startIndex >= 0) {
+    for (let i = startIndex; i < steps.length; i++) {
+      const step = steps[i];
+      if (step.type === "point" || step.type === "intersection") removePoints.add(step.pointId);
+      if (step.type === "line") removeLines.add(step.lineId);
+      if (step.type === "circle") removeCircles.add(step.circleId);
+      if (step.type === "tool") addByRef(step.output);
+    }
+  }
+
+  const hadTargets = removePoints.size > 0 || removeLines.size > 0 || removeCircles.size > 0;
+  if (!hadTargets) return false;
+
+  doc.points = (doc.points ?? []).filter((p) => !removePoints.has(p.id));
+  doc.lines = (doc.lines ?? []).filter((l) => !removeLines.has(l.id));
+  doc.circles = (doc.circles ?? []).filter((c) => !removeCircles.has(c.id));
+  sanitizeConvertedDoc(doc);
+  return true;
+}
+
+/**
+ * @param {import("./engine/state.js").ConstructionDoc} doc
+ * @param {{kind:"point"|"line"|"circle", id:string}} selection
+ */
+function selectionExistsInDoc(doc, selection) {
+  if (!doc || !selection?.id) return false;
+  if (selection.kind === "point") return (doc.points ?? []).some((p) => p.id === selection.id);
+  if (selection.kind === "line") return (doc.lines ?? []).some((l) => l.id === selection.id);
+  return (doc.circles ?? []).some((c) => c.id === selection.id);
+}
+
+/**
  * Unit-circle inversion around center `c`: c + (p-c)/|p-c|^2.
  *
  * @param {{x:number,y:number}} p
@@ -1314,10 +1482,18 @@ function fit2DViewToDoc(canvas, view, geom, doc) {
       view.offsetX = width / 2;
       view.offsetY = height / 2;
       // @ts-ignore - runtime extension set in view2d initializer
+      view.modelOffsetX = view.offsetX;
+      // @ts-ignore - runtime extension set in view2d initializer
+      view.modelOffsetY = view.offsetY;
+      // @ts-ignore - runtime extension set in view2d initializer
       view.initialized = true;
     } else if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
       view.offsetX = width / 2;
       view.offsetY = height * 0.35;
+      // @ts-ignore - runtime extension set in view2d initializer
+      view.modelOffsetX = view.offsetX;
+      // @ts-ignore - runtime extension set in view2d initializer
+      view.modelOffsetY = view.offsetY;
       // @ts-ignore - runtime extension set in view2d initializer
       view.initialized = true;
     }
@@ -1357,6 +1533,29 @@ function fit2DViewToDoc(canvas, view, geom, doc) {
   view.scale = nextScale;
   view.offsetX = width / 2 - cx * nextScale;
   view.offsetY = height / 2 + cy * nextScale;
+  // Keep fixed-frame models in a consistent projection frame.
+  if (
+    geom === GeometryType.EUCLIDEAN_PERSPECTIVE ||
+    geom === GeometryType.HYPERBOLIC_POINCARE ||
+    geom === GeometryType.HYPERBOLIC_KLEIN ||
+    geom === GeometryType.HYPERBOLIC_HALF_PLANE
+  ) {
+    // @ts-ignore - runtime extension set in view2d initializer
+    view.modelOffsetX = view.offsetX;
+    // @ts-ignore - runtime extension set in view2d initializer
+    view.modelOffsetY = view.offsetY;
+  } else {
+    // @ts-ignore - runtime extension set in view2d initializer
+    if (!Number.isFinite(view.modelOffsetX)) view.modelOffsetX = width / 2;
+    // @ts-ignore - runtime extension set in view2d initializer
+    if (!Number.isFinite(view.modelOffsetY))
+      view.modelOffsetY =
+        geom === GeometryType.EUCLIDEAN_PERSPECTIVE
+          ? height * 0.35
+          : geom === GeometryType.HYPERBOLIC_HALF_PLANE
+            ? height * 0.78
+            : height / 2;
+  }
   // @ts-ignore - runtime extension set in view2d initializer
   view.initialized = true;
 }

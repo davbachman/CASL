@@ -11,13 +11,18 @@ import {
 } from "./geometry.js";
 import { intersectCurves, signedDistanceToCurve } from "./geom2d.js";
 import { samplePoincareCirclePoints, samplePoincareGeodesicPoints } from "./hyperbolicCurves.js";
-import { hyperbolicDisplay2DToInternal, hyperbolicInternalToDisplay2D } from "./hyperbolicModels.js";
-import { hyperboloidViewport, projectPoincareOnHyperboloid, screenToHyperboloidPoincare } from "./hyperboloidView.js?v=20260206-64";
 import {
-  perspectiveDisplayLineFromWorldLine,
+  clampToPoincareDisk,
+  hyperbolicDisplay2DToInternal,
+  hyperbolicInternalToDisplay2D,
+  poincareTranslate,
+  poincareTranslateInverse,
+} from "./hyperbolicModels.js?v=20260207-80";
+import { hyperboloidViewport, projectPoincareOnHyperboloid, screenToHyperboloidPoincare } from "./hyperboloidView.js?v=20260207-80";
+import {
   perspectiveDisplayToWorld,
   perspectiveWorldToDisplay,
-} from "./perspectiveView.js?v=20260206-69";
+} from "./perspectiveView.js?v=20260207-80";
 import { sampleSpherePlanePoints, sphereToStereographic, stereographicToSphere } from "./stereographic.js";
 import { makeId } from "./util/ids.js";
 import { initialize2DViewIfNeeded, pan2D, screenToWorld, worldToScreen, zoom2DAt } from "./view2d.js";
@@ -31,6 +36,134 @@ import { dot3, norm3 } from "./vec3.js";
 /** @param {GeometryType} geom */
 function isOrbitalGeometry(geom) {
   return geom === GeometryType.SPHERICAL || geom === GeometryType.HYPERBOLIC_HYPERBOLOID;
+}
+
+/** @param {GeometryType} geom */
+function usesFixedFramePanGeometry(geom) {
+  return (
+    geom === GeometryType.EUCLIDEAN_PERSPECTIVE ||
+    geom === GeometryType.HYPERBOLIC_POINCARE ||
+    geom === GeometryType.HYPERBOLIC_KLEIN ||
+    geom === GeometryType.HYPERBOLIC_HALF_PLANE
+  );
+}
+
+/**
+ * Shift the displayed hyperbolic origin without rotating the rendered surface.
+ *
+ * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number, roll?:number, chartOffsetX?:number, chartOffsetY?:number}} view
+ * @param {number} dxPx
+ * @param {number} dyPx
+ */
+function panHyperboloidOrigin(view, dxPx, dyPx) {
+  const speed = 0.0015 / Math.max(0.25, view.zoom);
+  const delta = clampToPoincareDisk({ x: dxPx * speed, y: -dyPx * speed });
+  const o = getChartOffset(view);
+  const shifted = poincareTranslate(o, delta);
+  view.chartOffsetX = shifted.x;
+  view.chartOffsetY = shifted.y;
+}
+
+/**
+ * @param {{chartOffsetX?:number, chartOffsetY?:number}} view
+ * @returns {{x:number,y:number}}
+ */
+function getChartOffset(view) {
+  return {
+    x: Number.isFinite(view?.chartOffsetX) ? view.chartOffsetX : 0,
+    y: Number.isFinite(view?.chartOffsetY) ? view.chartOffsetY : 0,
+  };
+}
+
+/**
+ * @param {{chartOffsetX?:number, chartOffsetY?:number}} view
+ * @param {number} dxPx
+ * @param {number} dyPx
+ * @param {number} scale
+ */
+function panHyperbolic2DOrigin(view, dxPx, dyPx, scale) {
+  const speed = 1 / Math.max(120, scale || 1);
+  const delta = clampToPoincareDisk({ x: dxPx * speed, y: -dyPx * speed });
+  const o = getChartOffset(view);
+  const shifted = poincareTranslate(o, delta);
+  view.chartOffsetX = shifted.x;
+  view.chartOffsetY = shifted.y;
+}
+
+/**
+ * Half-plane origin pan uses the half-plane isometries:
+ * x-translation and positive y-dilation.
+ *
+ * @param {{chartOffsetX?:number, chartOffsetY?:number, scale:number}} view
+ * @param {number} dxPx
+ * @param {number} dyPx
+ */
+function panHalfPlaneOrigin(view, dxPx, dyPx) {
+  const speed = 1 / Math.max(80, view.scale || 1);
+  const o = getChartOffset(view);
+  view.chartOffsetX = o.x + dxPx * speed;
+  const nextLogScale = o.y - dyPx * speed * 0.7;
+  // Keep exponentials numerically stable while allowing broad panning.
+  view.chartOffsetY = Math.max(-6, Math.min(6, nextLogScale));
+}
+
+/**
+ * @param {{chartOffsetX?:number, chartOffsetY?:number, scale:number}} view
+ * @param {number} dxPx
+ * @param {number} dyPx
+ */
+function panPerspectiveOrigin(view, dxPx, dyPx) {
+  const speed = 1 / Math.max(40, view.scale || 1);
+  const o = getChartOffset(view);
+  view.chartOffsetX = o.x + dxPx * speed;
+  view.chartOffsetY = o.y - dyPx * speed;
+}
+
+/**
+ * Apply origin shift (view-level pan) to a model point.
+ *
+ * @param {GeometryType} geom
+ * @param {{chartOffsetX?:number, chartOffsetY?:number}} view
+ * @param {{x:number,y:number}} p
+ * @returns {{x:number,y:number}}
+ */
+function applyOriginShift(geom, view, p) {
+  const t = getChartOffset(view);
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    return { x: p.x + t.x, y: p.y + t.y };
+  }
+  if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) {
+    const scaleY = Math.exp(t.y);
+    return { x: p.x * scaleY + t.x, y: Math.max(1e-9, p.y * scaleY) };
+  }
+  if (geom === GeometryType.HYPERBOLIC_POINCARE || geom === GeometryType.HYPERBOLIC_KLEIN) {
+    return poincareTranslate(p, t);
+  }
+  return p;
+}
+
+/**
+ * Remove origin shift (view-level pan) from a model point.
+ *
+ * @param {GeometryType} geom
+ * @param {{chartOffsetX?:number, chartOffsetY?:number}} view
+ * @param {{x:number,y:number}} p
+ * @returns {{x:number,y:number}}
+ */
+function removeOriginShift(geom, view, p) {
+  const t = getChartOffset(view);
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    return { x: p.x - t.x, y: p.y - t.y };
+  }
+  if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) {
+    const scaleY = Math.exp(t.y);
+    const denom = Math.max(1e-9, scaleY);
+    return { x: (p.x - t.x) / denom, y: p.y / denom };
+  }
+  if (geom === GeometryType.HYPERBOLIC_POINCARE || geom === GeometryType.HYPERBOLIC_KLEIN) {
+    return poincareTranslateInverse(p, t);
+  }
+  return p;
 }
 
 /**
@@ -75,6 +208,21 @@ export function attachCanvasController(canvas, deps) {
           ? { offsetY: rect.height * 0.35 }
           : undefined,
     );
+    if (usesFixedFramePanGeometry(geom)) {
+      // @ts-ignore - runtime extension set in view2d initializer
+      if (!Number.isFinite(view.modelOffsetX)) view.modelOffsetX = view.offsetX;
+      // @ts-ignore - runtime extension set in view2d initializer
+      if (!Number.isFinite(view.modelOffsetY)) view.modelOffsetY = view.offsetY;
+      // @ts-ignore - runtime extension for origin panning
+      if (!Number.isFinite(view.chartOffsetX)) view.chartOffsetX = 0;
+      // @ts-ignore - runtime extension for origin panning
+      if (!Number.isFinite(view.chartOffsetY)) view.chartOffsetY = 0;
+      // Keep a fixed display frame for these models; panning is modeled by chart offsets.
+      // @ts-ignore - runtime extension set in view2d initializer
+      view.offsetX = view.modelOffsetX;
+      // @ts-ignore - runtime extension set in view2d initializer
+      view.offsetY = view.modelOffsetY;
+    }
   };
 
   canvas.addEventListener("contextmenu", (e) => {
@@ -85,6 +233,8 @@ export function attachCanvasController(canvas, deps) {
     const pos = getCSSPos(e);
     const hit = hitTestAny(state, geom, pos, canvas);
     if (!hit) return;
+    state.selection = hit;
+    deps.requestRender();
 
     const pane = canvas.parentElement;
     const paneRect = pane ? pane.getBoundingClientRect() : canvas.getBoundingClientRect();
@@ -103,10 +253,12 @@ export function attachCanvasController(canvas, deps) {
 
     const state = deps.getState();
     const geom = state.activeGeometry;
-
     const hitPoint = hitTestPoint(state, geom, pos, canvas);
-    if (hitPoint) action = { kind: "point", pointId: hitPoint.id };
-    else action = { kind: "pan" };
+    if (hitPoint) {
+      action = { kind: "point", pointId: hitPoint.id };
+      state.selection = { kind: "point", id: hitPoint.id };
+      deps.requestRender();
+    } else action = { kind: "pan" };
   });
 
   canvas.addEventListener("pointermove", (e) => {
@@ -124,8 +276,21 @@ export function attachCanvasController(canvas, deps) {
     const view = state.views[geom];
 
     if (action.kind === "pan") {
-      if (geom === GeometryType.HYPERBOLIC_HYPERBOLOID) rotateHyperboloidByDrag(/** @type {any} */ (view), dx, dy);
-      else if (isOrbitalGeometry(geom)) rotateByDrag(/** @type {any} */ (view), dx, dy);
+      if (geom === GeometryType.HYPERBOLIC_HYPERBOLOID) {
+        if (e.shiftKey) rotateHyperboloidByDrag(/** @type {any} */ (view), dx, dy);
+        else panHyperboloidOrigin(/** @type {any} */ (view), dx, dy);
+      } else if (
+        geom === GeometryType.HYPERBOLIC_POINCARE ||
+        geom === GeometryType.HYPERBOLIC_KLEIN
+      ) {
+        panHyperbolic2DOrigin(/** @type {any} */ (view), dx, dy, view.scale);
+      } else if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) {
+        panHalfPlaneOrigin(/** @type {any} */ (view), dx, dy);
+      } else if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+        panPerspectiveOrigin(/** @type {any} */ (view), dx, dy);
+      } else if (usesFixedFramePanGeometry(geom)) {
+        pan2D(/** @type {any} */ (view), dx, dy);
+      } else if (isOrbitalGeometry(geom)) rotateByDrag(/** @type {any} */ (view), dx, dy);
       else pan2D(/** @type {any} */ (view), dx, dy);
       downAt = pos;
       deps.requestRender();
@@ -193,6 +358,8 @@ export function attachCanvasController(canvas, deps) {
 
     if (!moved) {
       // Treat as a click
+      const clickedRef = hitTestAny(state, geom, pos, canvas);
+      state.selection = clickedRef;
       if (state.toolBuilder) {
         handleToolBuilderClick(state, geom, pos, canvas);
         deps.requestRender();
@@ -205,12 +372,20 @@ export function attachCanvasController(canvas, deps) {
           const obj = hitTestCurve(state, geom, pos, canvas);
           if (obj) onIntersectClick(state, geom, doc, obj, view, canvas, deps.pushHistory);
           deps.requestRender();
-        } else {
+        } else if (
+          state.activeTool === ToolType.POINT ||
+          state.activeTool === ToolType.LINE ||
+          state.activeTool === ToolType.CIRCLE
+        ) {
           const hit = getOrCreatePointAtClick(state, geom, doc, view, pos, canvas, deps.pushHistory);
           if (hit) {
+            state.selection = { kind: "point", id: hit.id };
             if (state.activeTool === ToolType.LINE) onLineClick(state, doc, hit.id, hit.created, deps.pushHistory);
             if (state.activeTool === ToolType.CIRCLE) onCircleClick(state, doc, hit.id, hit.created, deps.pushHistory);
           }
+          deps.requestRender();
+        } else {
+          // No active tool: click only selects geometry for edit/delete.
           deps.requestRender();
         }
       }
@@ -2119,10 +2294,17 @@ function enforceSphereConstraints(doc) {
 function screenToModelPoint2D(geom, view, pos) {
   const raw = screenToWorld(view, pos);
   if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
-    return perspectiveDisplayToWorld(raw);
+    const worldShown = perspectiveDisplayToWorld(raw);
+    if (!worldShown) return null;
+    return removeOriginShift(geom, view, worldShown);
   }
   if (geom === GeometryType.HYPERBOLIC_KLEIN) {
-    return hyperbolicDisplay2DToInternal(geom, raw);
+    const shown = hyperbolicDisplay2DToInternal(geom, raw);
+    if (!shown) return null;
+    return removeOriginShift(geom, view, shown);
+  }
+  if (geom === GeometryType.HYPERBOLIC_POINCARE || geom === GeometryType.HYPERBOLIC_HALF_PLANE) {
+    return removeOriginShift(geom, view, raw);
   }
   return raw;
 }
@@ -2137,13 +2319,18 @@ function screenToModelPoint2D(geom, view, pos) {
  */
 function projectModelPointToScreen2D(geom, view, p) {
   if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
-    const display = perspectiveWorldToDisplay(p);
+    const shifted = applyOriginShift(geom, view, p);
+    const display = perspectiveWorldToDisplay(shifted);
     if (!display) return null;
     return worldToScreen(view, display);
   }
   if (geom === GeometryType.HYPERBOLIC_KLEIN) {
-    const display = hyperbolicInternalToDisplay2D(geom, p);
+    const shifted = applyOriginShift(geom, view, p);
+    const display = hyperbolicInternalToDisplay2D(geom, shifted);
     return worldToScreen(view, display);
+  }
+  if (geom === GeometryType.HYPERBOLIC_POINCARE || geom === GeometryType.HYPERBOLIC_HALF_PLANE) {
+    return worldToScreen(view, applyOriginShift(geom, view, p));
   }
   return worldToScreen(view, p);
 }
@@ -2156,7 +2343,7 @@ function projectModelPointToScreen2D(geom, view, p) {
  */
 function distanceToKleinCurvePx(view, posScreen, curve, geodesic) {
   if (geodesic) {
-    const seg = kleinGeodesicSegmentFromCurve(curve);
+    const seg = kleinGeodesicSegmentFromCurve(curve, view);
     if (seg) {
       const a = worldToScreen(view, seg.a);
       const b = worldToScreen(view, seg.b);
@@ -2166,29 +2353,40 @@ function distanceToKleinCurvePx(view, posScreen, curve, geodesic) {
   const internalPts =
     geodesic || curve.kind === "line" ? samplePoincareGeodesicPoints(curve, 150) : samplePoincareCirclePoints(curve, 230);
   if (internalPts.length < 2) return Infinity;
-  const screenPts = internalPts.map((p) => worldToScreen(view, hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, p)));
+  const screenPts = internalPts.map((p) => {
+    const shifted = applyOriginShift(GeometryType.HYPERBOLIC_KLEIN, view, p);
+    const d = hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, shifted);
+    return worldToScreen(view, d);
+  });
   return distanceToScreenPolyline(posScreen, screenPts);
 }
 
 /**
  * @param {import("./geom2d.js").Curve2D} curve
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number, chartOffsetX?:number, chartOffsetY?:number}} view
  * @returns {{a:{x:number,y:number}, b:{x:number,y:number}} | null}
  */
-function kleinGeodesicSegmentFromCurve(curve) {
+function kleinGeodesicSegmentFromCurve(curve, view) {
   if (curve.kind === "line") {
     const seg = clipLineToUnitDisk(curve);
     if (!seg) return null;
     return {
-      a: hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, seg.a),
-      b: hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, seg.b),
+      a: hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, applyOriginShift(GeometryType.HYPERBOLIC_KLEIN, view, seg.a)),
+      b: hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, applyOriginShift(GeometryType.HYPERBOLIC_KLEIN, view, seg.b)),
     };
   }
   const boundary = { kind: "circle", cx: 0, cy: 0, r: 1 };
   const hits = intersectCurves(curve, boundary);
   if (hits.length < 2) return null;
   return {
-    a: hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, hits[0]),
-    b: hyperbolicInternalToDisplay2D(GeometryType.HYPERBOLIC_KLEIN, hits[1]),
+    a: hyperbolicInternalToDisplay2D(
+      GeometryType.HYPERBOLIC_KLEIN,
+      applyOriginShift(GeometryType.HYPERBOLIC_KLEIN, view, hits[0]),
+    ),
+    b: hyperbolicInternalToDisplay2D(
+      GeometryType.HYPERBOLIC_KLEIN,
+      applyOriginShift(GeometryType.HYPERBOLIC_KLEIN, view, hits[1]),
+    ),
   };
 }
 
@@ -2230,13 +2428,20 @@ function distanceToHyperboloidCurvePx(view, vp, posScreen, curve, geodesic) {
  */
 function distanceToPerspectiveCurvePx(view, posScreen, curve) {
   if (curve.kind === "line") {
-    const dLine = perspectiveDisplayLineFromWorldLine(curve);
-    if (!dLine) return Infinity;
-    const p = screenToWorld(view, posScreen);
-    const n = Math.hypot(dLine.a, dLine.b);
-    if (!(n > 1e-12)) return Infinity;
-    const dWorld = Math.abs((dLine.a * p.x + dLine.b * p.y + dLine.c) / n);
-    return dWorld * view.scale;
+    /** @type {Array<{x:number,y:number} | null>} */
+    const screenPts = [];
+    const steps = 220;
+    const extent = 40;
+    const n2 = curve.a * curve.a + curve.b * curve.b;
+    if (!(n2 > 1e-12)) return Infinity;
+    const base = { x: -curve.a * curve.c / n2, y: -curve.b * curve.c / n2 };
+    const dir = { x: -curve.b, y: curve.a };
+    for (let i = 0; i <= steps; i++) {
+      const t = -extent + (2 * extent * i) / steps;
+      const w = { x: base.x + dir.x * t, y: base.y + dir.y * t };
+      screenPts.push(projectModelPointToScreen2D(GeometryType.EUCLIDEAN_PERSPECTIVE, view, w));
+    }
+    return distanceToScreenPolylineWithBreaks(posScreen, screenPts);
   }
 
   /** @type {Array<{x:number,y:number} | null>} */

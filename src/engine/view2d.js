@@ -50,7 +50,10 @@ export function initialize2DViewIfNeeded(view, widthPx, heightPx, opts) {
   if (view.initialized) return;
   view.offsetX = widthPx / 2;
   view.offsetY = typeof opts?.offsetY === "number" ? opts.offsetY : heightPx / 2;
+  // @ts-ignore - untyped extension used by fixed-frame models
+  view.modelOffsetX = view.offsetX;
+  // @ts-ignore - untyped extension used by fixed-frame models
+  view.modelOffsetY = view.offsetY;
   // @ts-ignore - untyped extension
   view.initialized = true;
 }
-

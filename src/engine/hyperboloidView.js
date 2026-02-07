@@ -1,9 +1,15 @@
-import { hyperboloidToPoincare, poincareToHyperboloid } from "./hyperbolicModels.js";
+import {
+  clampToPoincareDisk,
+  hyperboloidToPoincare,
+  poincareToHyperboloid,
+  poincareTranslate,
+  poincareTranslateInverse,
+} from "./hyperbolicModels.js?v=20260207-80";
 import { rotateFromView, rotateToView } from "./sphereView.js";
 
 /** @typedef {{x:number,y:number}} Vec2 */
 /** @typedef {{x:number,y:number,z:number}} Vec3 */
-/** @typedef {{kind:"sphere", yaw:number, pitch:number, zoom:number, roll?:number}} OrbitalView */
+/** @typedef {{kind:"sphere", yaw:number, pitch:number, zoom:number, roll?:number, chartOffsetX?:number, chartOffsetY?:number}} OrbitalView */
 /** @typedef {{cx:number, cy:number, scale:number, cameraZ:number}} HyperboloidViewport */
 
 const CAMERA_Z = 30;
@@ -44,7 +50,12 @@ export function hyperboloidViewport(view, cssW, cssH) {
  * @returns {{x:number,y:number,depth:number} | null}
  */
 export function projectPoincareOnHyperboloid(view, vp, p) {
-  const h = poincareToHyperboloid(p);
+  const t = {
+    x: Number.isFinite(view.chartOffsetX) ? view.chartOffsetX : 0,
+    y: Number.isFinite(view.chartOffsetY) ? view.chartOffsetY : 0,
+  };
+  const shifted = clampToPoincareDisk(poincareTranslate(p, t));
+  const h = poincareToHyperboloid(shifted);
   const v = rotateToView(view, h);
   const den = vp.cameraZ - v.z;
   if (den <= 1e-5) return null;
@@ -98,7 +109,12 @@ export function screenToHyperboloidPoincare(view, screen, vp) {
       best = p;
     }
   }
-  return best;
+  if (!best) return null;
+  const t = {
+    x: Number.isFinite(view.chartOffsetX) ? view.chartOffsetX : 0,
+    y: Number.isFinite(view.chartOffsetY) ? view.chartOffsetY : 0,
+  };
+  return clampToPoincareDisk(poincareTranslateInverse(best, t));
 }
 
 /** @param {Vec3} a @param {Vec3} b */

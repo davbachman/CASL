@@ -146,7 +146,7 @@ export const ToolType = /** @type {const} */ ({
  *  showSteps: boolean,
  *  nextToolId: number,
  *  pending: null | { tool: ToolType.LINE | ToolType.CIRCLE, firstPointId: string } | { tool: ToolType.INTERSECT, firstObject: { kind: "line"|"circle", id: string } },
- *  selection: null | { kind: "line"|"circle", id: string }
+ *  selection: null | { kind: "point"|"line"|"circle", id: string }
  * }} AppState
  */
 
