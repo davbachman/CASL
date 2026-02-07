@@ -106,7 +106,9 @@
             <summary class="menu-top-btn">Edit</summary>
             <div class="menu-panel" role="menu">
               <button class="menu-item" type="button" data-action="undo">Undo Cmd-Z</button>
+              <button class="menu-item" type="button" data-action="delete">Delete</button>
               <button class="menu-item" type="button" data-action="clear">Clear</button>
+              <button class="menu-item" type="button" data-action="reset">Reset</button>
             </div>
           </details>
           <details class="menu-dropdown">
@@ -162,7 +164,7 @@
             <div class="hint-title">Controls</div>
             <ul class="hint-list">
               <li>Drag point: move</li>
-              <li>Drag background: pan / rotate 3D models</li>
+              <li>Drag background: pan (Shift-drag hyperboloid: rotate)</li>
               <li>Wheel: zoom</li>
               <li>Right-click: style &amp; label</li>
             </ul>
@@ -193,6 +195,6 @@
       accept="application/json,.json"
     />
 
-    <script type="module" src="./src/main.js?v=20260206-69"></script>
+    <script type="module" src="./src/main.js?v=20260207-80"></script>
   </body>
 </html>

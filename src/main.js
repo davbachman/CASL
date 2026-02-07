@@ -1,4 +1,4 @@
-import { createApp } from "./app.js?v=20260206-69";
+import { createApp } from "./app.js?v=20260207-80";
 
 const deps = {
   canvas: /** @type {HTMLCanvasElement} */ (document.getElementById("canvas")),
@@ -51,6 +51,18 @@ function closeAllMenus() {
   for (const submenu of menuSubmenus) submenu.classList.remove("is-open");
 }
 
+/**
+ * @param {HTMLDetailsElement} keep
+ */
+function closeMenusExcept(keep) {
+  for (const menu of menuDropdowns) {
+    if (menu !== keep) menu.open = false;
+  }
+  for (const submenu of menuSubmenus) {
+    if (!keep.contains(submenu)) submenu.classList.remove("is-open");
+  }
+}
+
 function setModelSelectionUI() {
   const active = deps.geometrySelect.value;
   for (const item of modelItems) {
@@ -100,7 +112,9 @@ async function runMenuAction(item) {
   }
   if (action === "import-tools") app.importTools();
   if (action === "undo") app.undo();
+  if (action === "delete") app.deleteSelection();
   if (action === "clear") app.clear();
+  if (action === "reset") app.reset();
   if (action === "show-history") app.setHistoryOpen(true);
   if (action === "hide-history") app.setHistoryOpen(false);
   if (action === "show-steps") app.setShowSteps(true);
@@ -126,6 +140,19 @@ document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   closeAllMenus();
 });
+
+for (const menu of menuDropdowns) {
+  if (!(menu instanceof HTMLDetailsElement)) continue;
+  menu.addEventListener("toggle", () => {
+    if (menu.open) {
+      closeMenusExcept(menu);
+      return;
+    }
+    for (const submenu of menuSubmenus) {
+      if (menu.contains(submenu)) submenu.classList.remove("is-open");
+    }
+  });
+}
 
 for (const item of menuItems) {
   if (!(item instanceof HTMLElement)) continue;

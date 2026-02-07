@@ -57,12 +57,42 @@ Original prompt: OK, let's add some I/O. When you open up the history pane, ther
   - Construction drawing clipped to the region below the horizon.
   - Point/domain constraints enforced to the below-horizon half-plane.
   - Euclidean-family model switching now includes `Perspective` (identity with standard Euclidean, plus inversive conversion paths preserved).
+- Added `Edit -> Delete` and keyboard `Delete/Backspace` support:
+  - Users can select point/line/circle and delete it.
+  - Deletion cascades through all geometry created after the selected element (by history step order, with ID-order fallback).
+  - Selection highlighting now includes points, lines, and circles across all models.
+- Added `Edit -> Reset` with confirmation dialog:
+  - Message: `Are you sure? All work will be lost.`
+  - Reset clears all geometry documents, all per-geometry undo stacks, all history steps, and all user-defined tools.
+  - Reset restores defaults (`Euclidean`, `Line`, steps hidden).
+- Updated pan behavior:
+  - `Perspective`, `Poincare Disk`, `Klein`, `Half Plane`: panning now moves geometry origin while the model frame (horizon/disk/boundary) remains fixed.
+  - `Hyperboloid`: normal drag pans origin (chart offset); `Shift`+drag rotates/tilts as before.
+  - Added fixed-frame model anchors (`modelOffsetX/Y`) to keep model overlays stable during pan/zoom.
+- Added strict model-boundary clipping for fixed-frame views:
+  - Poincare/Klein geometry is clipped to the disk interior.
+  - Half-plane geometry is clipped above the boundary line.
+  - Perspective geometry remains clipped below the horizon.
+  - Prevents panned geometry from visibly rendering outside its model frame.
+- Reworked fixed-frame origin panning math for `Poincare/Klein/Half-plane/Perspective`:
+  - Added Poincare-disk Möbius translation helpers (`poincareTranslate`, inverse) in `hyperbolicModels.js`.
+  - Panning now updates view-level chart offsets (instead of screen offsets) for those models.
+  - Rendering now derives curves from a view-shifted document so hyperbolic geodesics remain valid and stay attached to boundaries.
+  - Input conversion now applies inverse chart shifts so click/drag operations act in underlying construction coordinates.
+- Published additional cache-bust (`v=20260206-74`) after import-chain fixes to avoid stale broken modules.
+- Added draw-time guard in `renderer.draw2D` to avoid total UI lock if a malformed display doc is encountered.
 
 ## Notes
 - JavaScript runtime syntax check was not run because `node` is not available in the current environment.
 - Browser-level interaction testing is still required for Klein/Hyperboloid custom-tool edge cases.
+- Playwright verification was not run in this environment because Node/npm tooling is unavailable (`node` command missing).
 
 ## Next TODOs
+- Manually verify the new edit actions:
+  - `Edit -> Delete` and keyboard Delete/Backspace in each model.
+  - `Edit -> Reset` confirmation flow and full-state/tool reset behavior.
+- Manually verify fixed-frame pan semantics:
+  - `Perspective`, `Poincare`, `Klein`, `Half Plane`, `Hyperboloid` (normal drag pans origin, Shift-drag rotates hyperboloid).
 - Manually test import/export round-trip in browser with multiple geometries and custom tools.
 - Manually verify popup print flow in browsers with strict popup blocking settings.
 - Manually test menubar behavior (outside click close, Escape close, menu command routing).

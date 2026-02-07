@@ -19,6 +19,42 @@ export function clampToPoincareDisk(p) {
 }
 
 /**
+ * Disk automorphism (Möbius map) that sends 0 to `t`.
+ * Complex form: f_t(z) = (z + t) / (1 + conj(t) z).
+ *
+ * @param {Vec2} z
+ * @param {Vec2} t
+ * @returns {Vec2}
+ */
+export function poincareTranslate(z, t) {
+  const tx = Number.isFinite(t?.x) ? t.x : 0;
+  const ty = Number.isFinite(t?.y) ? t.y : 0;
+  if (Math.abs(tx) < 1e-14 && Math.abs(ty) < 1e-14) return { x: z.x, y: z.y };
+
+  const a = z.x + tx;
+  const b = z.y + ty;
+  const u = 1 + tx * z.x + ty * z.y;
+  const v = tx * z.y - ty * z.x;
+  const den = u * u + v * v;
+  if (!(den > 1e-14)) return clampToPoincareDisk({ x: z.x, y: z.y });
+
+  const x = (a * u + b * v) / den;
+  const y = (b * u - a * v) / den;
+  return clampToPoincareDisk({ x, y });
+}
+
+/**
+ * Inverse disk automorphism for `poincareTranslate`.
+ *
+ * @param {Vec2} z
+ * @param {Vec2} t
+ * @returns {Vec2}
+ */
+export function poincareTranslateInverse(z, t) {
+  return poincareTranslate(z, { x: -(t?.x ?? 0), y: -(t?.y ?? 0) });
+}
+
+/**
  * Cayley transform from Poincare disk to upper half-plane.
  * @param {Vec2} p
  */

@@ -2,9 +2,15 @@ import { GeometryType } from "./state.js";
 import { derive2DCircleCurve, derive2DLineCurve, deriveSphereCircle, deriveSphereGreatCircle } from "./geometry.js";
 import { intersectCurves, lineThrough } from "./geom2d.js";
 import { samplePoincareCirclePoints, samplePoincareGeodesicPoints } from "./hyperbolicCurves.js";
-import { hyperbolicInternalToDisplay2D, hyperboloidToPoincare, poincareToHyperboloid, poincareToKlein } from "./hyperbolicModels.js";
-import { hyperboloidViewport } from "./hyperboloidView.js?v=20260206-64";
-import { perspectiveDisplayLineFromWorldLine, perspectiveWorldToDisplay } from "./perspectiveView.js?v=20260206-69";
+import {
+  hyperbolicInternalToDisplay2D,
+  hyperboloidToPoincare,
+  poincareToHyperboloid,
+  poincareToKlein,
+  poincareTranslate,
+} from "./hyperbolicModels.js?v=20260207-79";
+import { hyperboloidViewport } from "./hyperboloidView.js?v=20260207-79";
+import { perspectiveWorldToDisplay } from "./perspectiveView.js?v=20260207-79";
 import { sampleSpherePlanePoints, sphereToStereographic } from "./stereographic.js";
 import { initialize2DViewIfNeeded, worldToScreen } from "./view2d.js";
 import { projectSphere, rotateFromView, rotateToView } from "./sphereView.js";
@@ -105,76 +111,106 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
   ctx.save();
   // Work in CSS pixels.
   ctx.scale(dpr, dpr);
+  const cssW = w / dpr;
+  const cssH = h / dpr;
+
+  if (
+    geom === GeometryType.EUCLIDEAN_PERSPECTIVE ||
+    geom === GeometryType.HYPERBOLIC_POINCARE ||
+    geom === GeometryType.HYPERBOLIC_KLEIN ||
+    geom === GeometryType.HYPERBOLIC_HALF_PLANE
+  ) {
+    view.offsetX = getModelAnchorX(view);
+    view.offsetY = getModelAnchorY(view);
+  }
 
   // Background model
   ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, w / dpr, h / dpr);
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  const diskCenter = { x: getModelAnchorX(view), y: getModelAnchorY(view) };
+  const diskR = view.scale;
+  const boundaryY = getModelAnchorY(view);
+  const drawDoc = getDisplayDocForView(geom, doc, view);
+  if (!drawDoc || !Array.isArray(drawDoc.points) || !Array.isArray(drawDoc.lines) || !Array.isArray(drawDoc.circles)) {
+    ctx.restore();
+    return;
+  }
 
   if (geom === GeometryType.HYPERBOLIC_POINCARE || geom === GeometryType.HYPERBOLIC_KLEIN) {
-    const center = { x: view.offsetX, y: view.offsetY };
-    const diskR = view.scale;
     // Shade outside disk.
     ctx.fillStyle = "#f1f5f9";
-    ctx.fillRect(0, 0, w / dpr, h / dpr);
+    ctx.fillRect(0, 0, cssW, cssH);
     ctx.fillStyle = "#ffffff";
     ctx.beginPath();
-    ctx.arc(center.x, center.y, diskR, 0, Math.PI * 2);
+    ctx.arc(diskCenter.x, diskCenter.y, diskR, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = "rgba(0,0,0,0.85)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.arc(center.x, center.y, diskR, 0, Math.PI * 2);
+    ctx.arc(diskCenter.x, diskCenter.y, diskR, 0, Math.PI * 2);
     ctx.stroke();
   } else if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) {
     ctx.strokeStyle = "rgba(0,0,0,0.8)";
     ctx.lineWidth = 1.5;
-    // boundary y=0
-    const y0 = view.offsetY;
     // Shade the excluded half-plane.
     ctx.fillStyle = "#f1f5f9";
-    ctx.fillRect(0, y0, w / dpr, h / dpr - y0);
+    ctx.fillRect(0, boundaryY, cssW, cssH - boundaryY);
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, w / dpr, y0);
+    ctx.fillRect(0, 0, cssW, boundaryY);
     ctx.beginPath();
-    ctx.moveTo(0, y0);
-    ctx.lineTo(w / dpr, y0);
+    ctx.moveTo(0, boundaryY);
+    ctx.lineTo(cssW, boundaryY);
     ctx.stroke();
   } else if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
-    const y0 = view.offsetY;
     ctx.fillStyle = "#edf2fb";
-    ctx.fillRect(0, 0, w / dpr, Math.max(0, y0));
+    ctx.fillRect(0, 0, cssW, Math.max(0, boundaryY));
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, y0, w / dpr, h / dpr - y0);
+    ctx.fillRect(0, boundaryY, cssW, cssH - boundaryY);
     ctx.strokeStyle = "rgba(0,0,0,0.75)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(0, y0);
-    ctx.lineTo(w / dpr, y0);
+    ctx.moveTo(0, boundaryY);
+    ctx.lineTo(cssW, boundaryY);
     ctx.stroke();
   }
 
+  let clippedDisk = false;
+  let clippedHalfPlane = false;
   let clippedPerspective = false;
-  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
-    clippedPerspective = true;
-    const y0 = view.offsetY;
+  if (geom === GeometryType.HYPERBOLIC_POINCARE || geom === GeometryType.HYPERBOLIC_KLEIN) {
+    clippedDisk = true;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, y0, w / dpr, h / dpr - y0);
+    ctx.arc(diskCenter.x, diskCenter.y, diskR, 0, Math.PI * 2);
+    ctx.clip();
+  } else if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) {
+    clippedHalfPlane = true;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, cssW, Math.max(0, boundaryY));
+    ctx.clip();
+  } else if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    clippedPerspective = true;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, boundaryY, cssW, cssH - boundaryY);
     ctx.clip();
   }
 
   // Draw curves (lines/circles)
-  for (const circle of doc.circles) {
+  for (const circle of drawDoc.circles) {
     if (circle.hidden) continue;
-    const curve = derive2DCircleCurve(geom, doc, circle);
+    const curve = derive2DCircleCurve(geom, drawDoc, circle);
     if (!curve) continue;
     const isSelected =
       isToolRefSelected(state, "circle", circle.id) ||
+      (state.selection?.kind === "circle" && state.selection.id === circle.id) ||
       (state.pending?.tool === "intersect" &&
         state.pending.firstObject.kind === "circle" &&
         state.pending.firstObject.id === circle.id);
-    const c0 = doc.points.find((p) => p.id === circle.center);
-    const r0 = doc.points.find((p) => p.id === circle.radiusPoint);
+    const c0 = drawDoc.points.find((p) => p.id === circle.center);
+    const r0 = drawDoc.points.find((p) => p.id === circle.radiusPoint);
     const labelAnchorWorld =
       c0 && r0
         ? {
@@ -182,15 +218,15 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
             y: (c0.y + r0.y) / 2,
           }
         : null;
-    draw2DCircleObject(ctx, view, geom, curve, circle.style, circle.label, isSelected, w / dpr, h / dpr, labelAnchorWorld);
+    draw2DCircleObject(ctx, view, geom, curve, circle.style, circle.label, isSelected, cssW, cssH, labelAnchorWorld);
   }
 
-  for (const line of doc.lines) {
+  for (const line of drawDoc.lines) {
     if (line.hidden) continue;
-    const curve = derive2DLineCurve(geom, doc, line);
+    const curve = derive2DLineCurve(geom, drawDoc, line);
     if (!curve) continue;
-    const p1 = doc.points.find((p) => p.id === line.p1);
-    const p2 = doc.points.find((p) => p.id === line.p2);
+    const p1 = drawDoc.points.find((p) => p.id === line.p1);
+    const p2 = drawDoc.points.find((p) => p.id === line.p2);
     const definingPointsWorld =
       p1 && p2
         ? {
@@ -207,6 +243,7 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
         : null;
     const isSelected =
       isToolRefSelected(state, "line", line.id) ||
+      (state.selection?.kind === "line" && state.selection.id === line.id) ||
       (state.pending?.tool === "intersect" &&
         state.pending.firstObject.kind === "line" &&
         state.pending.firstObject.id === line.id);
@@ -218,30 +255,45 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
       line.style,
       line.label,
       isSelected,
-      w / dpr,
-      h / dpr,
+      cssW,
+      cssH,
       labelAnchorWorld,
       definingPointsWorld,
     );
   }
 
   // Draw points
-  for (const p of doc.points) {
+  for (const p of drawDoc.points) {
     if (p.hidden) continue;
     const highlight =
       isToolRefSelected(state, "point", p.id) ||
+      (state.selection?.kind === "point" && state.selection.id === p.id) ||
       (state.pending?.tool !== "intersect" && state.pending?.firstPointId === p.id);
     draw2DPoint(ctx, view, geom, p, highlight);
   }
 
-  if (clippedPerspective) {
+  if (clippedDisk) {
     ctx.restore();
-    const y0 = view.offsetY;
+    ctx.strokeStyle = "rgba(0,0,0,0.85)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(diskCenter.x, diskCenter.y, diskR, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (clippedHalfPlane) {
+    ctx.restore();
+    ctx.strokeStyle = "rgba(0,0,0,0.8)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, boundaryY);
+    ctx.lineTo(cssW, boundaryY);
+    ctx.stroke();
+  } else if (clippedPerspective) {
+    ctx.restore();
     ctx.strokeStyle = "rgba(0,0,0,0.75)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(0, y0);
-    ctx.lineTo(w / dpr, y0);
+    ctx.moveTo(0, boundaryY);
+    ctx.lineTo(cssW, boundaryY);
     ctx.stroke();
   }
 
@@ -268,22 +320,10 @@ function draw2DCircleObject(ctx, view, geom, curve, style, label, isSelected, cs
 
   if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
     if (curve.kind === "line") {
-      const dLine = perspectiveDisplayLineFromWorldLine(curve);
-      if (dLine) {
-        const seg = clipLineToView(dLine, view, cssW, cssH);
-        if (seg) {
-          const a = worldToScreen(view, seg.a);
-          const b = worldToScreen(view, seg.b);
-          ctx.beginPath();
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
-          ctx.stroke();
-          const lab = labelAnchorWorld
-            ? perspectiveWorldToScreen(view, labelAnchorWorld)
-            : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-          if (lab) drawCurveLabel(ctx, label, lab.x, lab.y);
-        }
-      }
+      const pts = samplePerspectiveLineScreenPoints(view, curve, 80, 420);
+      drawScreenPolylineWithBreaks(ctx, pts, Math.max(cssW, cssH) * 0.85);
+      const lab = labelAnchorWorld ? perspectiveWorldToScreen(view, labelAnchorWorld) : findMidScreenPoint(pts);
+      if (lab) drawCurveLabel(ctx, label, lab.x, lab.y);
       ctx.restore();
       return;
     }
@@ -381,22 +421,10 @@ function draw2DLineObject(
 
   if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
     if (curve.kind === "line") {
-      const dLine = perspectiveDisplayLineFromWorldLine(curve);
-      if (dLine) {
-        const seg = clipLineToView(dLine, view, cssW, cssH);
-        if (seg) {
-          const a = worldToScreen(view, seg.a);
-          const b = worldToScreen(view, seg.b);
-          ctx.beginPath();
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
-          ctx.stroke();
-          const lab = labelAnchorWorld
-            ? perspectiveWorldToScreen(view, labelAnchorWorld)
-            : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-          if (lab) drawCurveLabel(ctx, label, lab.x, lab.y);
-        }
-      }
+      const pts = samplePerspectiveLineScreenPoints(view, curve, 80, 420);
+      drawScreenPolylineWithBreaks(ctx, pts, Math.max(cssW, cssH) * 0.85);
+      const lab = labelAnchorWorld ? perspectiveWorldToScreen(view, labelAnchorWorld) : findMidScreenPoint(pts);
+      if (lab) drawCurveLabel(ctx, label, lab.x, lab.y);
       ctx.restore();
       return;
     }
@@ -888,6 +916,7 @@ function drawSphere(ctx, w, h, dpr, state, doc, view) {
     if (!plane) continue;
     const isSelected =
       isToolRefSelected(state, "circle", circle.id) ||
+      (state.selection?.kind === "circle" && state.selection.id === circle.id) ||
       (state.pending?.tool === "intersect" &&
         state.pending.firstObject.kind === "circle" &&
         state.pending.firstObject.id === circle.id);
@@ -900,6 +929,7 @@ function drawSphere(ctx, w, h, dpr, state, doc, view) {
     if (!plane) continue;
     const isSelected =
       isToolRefSelected(state, "line", line.id) ||
+      (state.selection?.kind === "line" && state.selection.id === line.id) ||
       (state.pending?.tool === "intersect" &&
         state.pending.firstObject.kind === "line" &&
         state.pending.firstObject.id === line.id);
@@ -912,6 +942,7 @@ function drawSphere(ctx, w, h, dpr, state, doc, view) {
     if (p.hidden) continue;
     const highlight =
       isToolRefSelected(state, "point", p.id) ||
+      (state.selection?.kind === "point" && state.selection.id === p.id) ||
       (state.pending?.tool !== "intersect" && state.pending?.firstPointId === p.id);
     drawSpherePoint(ctx, view, vp, p, highlight);
   }
@@ -952,6 +983,7 @@ function drawSphericalStereographic(ctx, w, h, dpr, state, doc, view) {
     if (!plane) continue;
     const isSelected =
       isToolRefSelected(state, "circle", circle.id) ||
+      (state.selection?.kind === "circle" && state.selection.id === circle.id) ||
       (state.pending?.tool === "intersect" &&
         state.pending.firstObject.kind === "circle" &&
         state.pending.firstObject.id === circle.id);
@@ -964,6 +996,7 @@ function drawSphericalStereographic(ctx, w, h, dpr, state, doc, view) {
     if (!plane) continue;
     const isSelected =
       isToolRefSelected(state, "line", line.id) ||
+      (state.selection?.kind === "line" && state.selection.id === line.id) ||
       (state.pending?.tool === "intersect" &&
         state.pending.firstObject.kind === "line" &&
         state.pending.firstObject.id === line.id);
@@ -977,6 +1010,7 @@ function drawSphericalStereographic(ctx, w, h, dpr, state, doc, view) {
     if (!screen) continue;
     const highlight =
       isToolRefSelected(state, "point", p.id) ||
+      (state.selection?.kind === "point" && state.selection.id === p.id) ||
       (state.pending?.tool !== "intersect" && state.pending?.firstPointId === p.id);
     ctx.save();
     ctx.globalAlpha = p.style.opacity;
@@ -1031,6 +1065,7 @@ function drawHyperboloid(ctx, w, h, dpr, state, doc, view) {
       curve.kind === "line" ? samplePoincareGeodesicPoints(curve, 160) : samplePoincareCirclePoints(curve, 220);
     const isSelected =
       isToolRefSelected(state, "circle", circle.id) ||
+      (state.selection?.kind === "circle" && state.selection.id === circle.id) ||
       (state.pending?.tool === "intersect" &&
         state.pending.firstObject.kind === "circle" &&
         state.pending.firstObject.id === circle.id);
@@ -1044,6 +1079,7 @@ function drawHyperboloid(ctx, w, h, dpr, state, doc, view) {
     const pts = samplePoincareGeodesicPoints(curve, 180);
     const isSelected =
       isToolRefSelected(state, "line", line.id) ||
+      (state.selection?.kind === "line" && state.selection.id === line.id) ||
       (state.pending?.tool === "intersect" &&
         state.pending.firstObject.kind === "line" &&
         state.pending.firstObject.id === line.id);
@@ -1054,8 +1090,13 @@ function drawHyperboloid(ctx, w, h, dpr, state, doc, view) {
     if (p.hidden) continue;
     const highlight =
       isToolRefSelected(state, "point", p.id) ||
+      (state.selection?.kind === "point" && state.selection.id === p.id) ||
       (state.pending?.tool !== "intersect" && state.pending?.firstPointId === p.id);
-    const s = projectHyperboloidVertex(view, vp, { x: p.x, y: p.y });
+    const shifted = applyHyperboloidChartOffset(view, { x: p.x, y: p.y });
+    if (shifted.x * shifted.x + shifted.y * shifted.y > HYPERBOLOID_SURFACE_RADIUS * HYPERBOLOID_SURFACE_RADIUS + 1e-9) {
+      continue;
+    }
+    const s = projectHyperboloidVertex(view, vp, shifted, true);
     if (!s) continue;
     ctx.save();
     ctx.globalAlpha = s.frontFacing ? p.style.opacity : p.style.opacity * 0.3;
@@ -1207,12 +1248,14 @@ function drawHyperboloidCurve(ctx, view, vp, points, style, label, isSelected) {
   /** @type {boolean[]} */
   const frontMask = [];
   for (const p of points) {
-    if (p.x * p.x + p.y * p.y > maxR2) {
+    const shifted = applyHyperboloidChartOffset(view, p);
+    const shiftedR2 = shifted.x * shifted.x + shifted.y * shifted.y;
+    if (shiftedR2 > maxR2) {
       screenPts.push(null);
       frontMask.push(false);
       continue;
     }
-    const s = projectHyperboloidVertex(view, vp, p);
+    const s = projectHyperboloidVertex(view, vp, shifted, true);
     if (!s) {
       screenPts.push(null);
       frontMask.push(false);
@@ -1270,9 +1313,13 @@ function collectHyperboloidRim(view, vp, radius, steps) {
  * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number}} view
  * @param {{cx:number, cy:number, scale:number, cameraZ:number}} vp
  * @param {{x:number,y:number}} p
+ * @param {boolean} [alreadyShifted]
  */
-function projectHyperboloidVertex(view, vp, p) {
-  const h = poincareToHyperboloid(p);
+function projectHyperboloidVertex(view, vp, p, alreadyShifted = false) {
+  const shifted = alreadyShifted ? p : applyHyperboloidChartOffset(view, p);
+  const r2 = shifted.x * shifted.x + shifted.y * shifted.y;
+  if (!(r2 < 1 - 1e-9)) return null;
+  const h = poincareToHyperboloid(shifted);
   const v = rotateToView(view, h);
   const den = vp.cameraZ - v.z;
   if (den <= 1e-5) return null;
@@ -1287,6 +1334,18 @@ function projectHyperboloidVertex(view, vp, p) {
     normal: normalView,
     frontFacing: !hidden,
   };
+}
+
+/**
+ * @param {{kind:"sphere", yaw:number, pitch:number, zoom:number, roll?:number, chartOffsetX?:number, chartOffsetY?:number}} view
+ * @param {{x:number,y:number}} p
+ */
+function applyHyperboloidChartOffset(view, p) {
+  const t = {
+    x: Number.isFinite(view.chartOffsetX) ? view.chartOffsetX : 0,
+    y: Number.isFinite(view.chartOffsetY) ? view.chartOffsetY : 0,
+  };
+  return poincareTranslate(p, t);
 }
 
 /**
@@ -1555,6 +1614,78 @@ function drawScreenPolylineWithBreaks(ctx, pts, maxJumpPx) {
     prev = p;
   }
   if (started) ctx.stroke();
+}
+
+/**
+ * @param {any} view
+ * @returns {{x:number,y:number}}
+ */
+function getChartOffset(view) {
+  return {
+    x: Number.isFinite(view?.chartOffsetX) ? view.chartOffsetX : 0,
+    y: Number.isFinite(view?.chartOffsetY) ? view.chartOffsetY : 0,
+  };
+}
+
+/**
+ * @param {GeometryType} geom
+ * @param {{x:number,y:number}} p
+ * @param {{x:number,y:number}} t
+ * @returns {{x:number,y:number}}
+ */
+function applyDisplayOriginShift(geom, p, t) {
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    return { x: p.x + t.x, y: p.y + t.y };
+  }
+  if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) {
+    const scaleY = Math.exp(t.y);
+    return { x: p.x * scaleY + t.x, y: Math.max(1e-9, p.y * scaleY) };
+  }
+  if (geom === GeometryType.HYPERBOLIC_POINCARE || geom === GeometryType.HYPERBOLIC_KLEIN) {
+    return poincareTranslate(p, t);
+  }
+  return p;
+}
+
+/**
+ * View-level origin panning is represented as a model-space transform of points.
+ *
+ * @param {GeometryType} geom
+ * @param {any} doc
+ * @param {any} view
+ */
+function getDisplayDocForView(geom, doc, view) {
+  if (
+    geom !== GeometryType.EUCLIDEAN_PERSPECTIVE &&
+    geom !== GeometryType.HYPERBOLIC_POINCARE &&
+    geom !== GeometryType.HYPERBOLIC_KLEIN &&
+    geom !== GeometryType.HYPERBOLIC_HALF_PLANE
+  ) {
+    return doc;
+  }
+  const t = getChartOffset(view);
+  if (Math.abs(t.x) < 1e-12 && Math.abs(t.y) < 1e-12) return doc;
+  const points = (doc.points ?? []).map((p) => {
+    const shifted = applyDisplayOriginShift(geom, { x: p.x, y: p.y }, t);
+    return { ...p, x: shifted.x, y: shifted.y };
+  });
+  return { ...doc, points };
+}
+
+/**
+ * @param {any} view
+ * @returns {number}
+ */
+function getModelAnchorX(view) {
+  return Number.isFinite(view?.modelOffsetX) ? view.modelOffsetX : view.offsetX;
+}
+
+/**
+ * @param {any} view
+ * @returns {number}
+ */
+function getModelAnchorY(view) {
+  return Number.isFinite(view?.modelOffsetY) ? view.modelOffsetY : view.offsetY;
 }
 
 /**
