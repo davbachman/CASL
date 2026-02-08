@@ -17,12 +17,12 @@ import {
   hyperbolicInternalToDisplay2D,
   poincareTranslate,
   poincareTranslateInverse,
-} from "./hyperbolicModels.js?v=20260207-80";
-import { hyperboloidViewport, projectPoincareOnHyperboloid, screenToHyperboloidPoincare } from "./hyperboloidView.js?v=20260207-80";
+} from "./hyperbolicModels.js?v=20260208-81";
+import { hyperboloidViewport, projectPoincareOnHyperboloid, screenToHyperboloidPoincare } from "./hyperboloidView.js?v=20260208-81";
 import {
   perspectiveDisplayToWorld,
   perspectiveWorldToDisplay,
-} from "./perspectiveView.js?v=20260207-80";
+} from "./perspectiveView.js?v=20260208-81";
 import { sampleSpherePlanePoints, sphereToStereographic, stereographicToSphere } from "./stereographic.js";
 import { makeId } from "./util/ids.js";
 import { initialize2DViewIfNeeded, pan2D, screenToWorld, worldToScreen, zoom2DAt } from "./view2d.js";
@@ -167,6 +167,35 @@ function removeOriginShift(geom, view, p) {
 }
 
 /**
+ * Domain checks are performed in the model space that is currently displayed.
+ * For perspective, that means checking after the pan-origin shift is applied.
+ *
+ * @param {GeometryType} geom
+ * @param {{chartOffsetX?:number, chartOffsetY?:number}} view
+ * @param {{x:number,y:number}} p
+ * @returns {boolean}
+ */
+function isPointInDisplayedDomain(geom, view, p) {
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+    return is2DPointInDomain(geom, applyOriginShift(geom, view, p));
+  }
+  return is2DPointInDomain(geom, p);
+}
+
+/**
+ * Curve solving should use the underlying geometry domain, not display clipping.
+ * Perspective keeps Euclidean incidences even when intermediate points are off-screen.
+ *
+ * @param {GeometryType} geom
+ * @param {{x:number,y:number}} p
+ * @returns {boolean}
+ */
+function isPointInOperationDomain(geom, p) {
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) return true;
+  return is2DPointInDomain(geom, p);
+}
+
+/**
  * @param {HTMLCanvasElement} canvas
  * @param {{
  *  getState: () => AppState,
@@ -205,7 +234,7 @@ export function attachCanvasController(canvas, deps) {
       geom === GeometryType.HYPERBOLIC_HALF_PLANE
         ? { offsetY: rect.height * 0.78 }
         : geom === GeometryType.EUCLIDEAN_PERSPECTIVE
-          ? { offsetY: rect.height * 0.35 }
+          ? { offsetY: rect.height * 0.5 }
           : undefined,
     );
     if (usesFixedFramePanGeometry(geom)) {
@@ -327,19 +356,19 @@ export function attachCanvasController(canvas, deps) {
         const vp = hyperboloidViewport(/** @type {any} */ (view), rect.width, rect.height);
         const q = screenToHyperboloidPoincare(/** @type {any} */ (view), pos, vp);
         if (!q) return;
-        const constrained = apply2DConstraints(geom, doc, p, q);
+        const constrained = apply2DConstraints(geom, /** @type {any} */ (view), doc, p, q);
         p.x = constrained.x;
         p.y = constrained.y;
-        enforce2DConstraints(geom, doc);
+        enforce2DConstraints(geom, /** @type {any} */ (view), doc);
       } else {
         const wPos = screenToModelPoint2D(geom, /** @type {any} */ (view), pos);
         if (!wPos) return;
         const constrained = constrain2DPoint(geom, wPos);
         if (!constrained) return;
-        const snapped = apply2DConstraints(geom, doc, p, constrained);
+        const snapped = apply2DConstraints(geom, /** @type {any} */ (view), doc, p, constrained);
         p.x = snapped.x;
         p.y = snapped.y;
-        enforce2DConstraints(geom, doc);
+        enforce2DConstraints(geom, /** @type {any} */ (view), doc);
       }
       deps.requestRender();
       return;
@@ -665,7 +694,7 @@ function hitTestCurve(state, geom, pos, canvas) {
   const v2d = /** @type {any} */ (view);
   const w = screenToModelPoint2D(geom, v2d, pos);
   if (!w) return null;
-  if (!is2DPointInDomain(geom, w)) return null;
+  if (!isPointInDisplayedDomain(geom, v2d, w)) return null;
 
   /** @type {null | {kind:"line"|"circle", id:string}} */
   let best = null;
@@ -747,7 +776,7 @@ function getOrCreatePointAtClick(state, geom, doc, view, pos, canvas, pushHistor
   const v2d = /** @type {any} */ (view);
   const w = screenToModelPoint2D(geom, v2d, pos);
   if (!w) return null;
-  if (!is2DPointInDomain(geom, w)) return null;
+  if (!isPointInDisplayedDomain(geom, v2d, w)) return null;
   const snapped =
     geom === GeometryType.HYPERBOLIC_KLEIN
       ? snapKleinPointToCurves(doc, v2d, pos, w)
@@ -1007,7 +1036,7 @@ function onIntersectClick(state, geom, doc, obj, view, canvas, pushHistory) {
   const curveB = lineB ? derive2DLineCurve(geom, doc, lineB) : circleB ? derive2DCircleCurve(geom, doc, circleB) : null;
   if (!curveA || !curveB) return;
 
-  const hits = intersectCurves(curveA, curveB).filter((p) => is2DPointInDomain(geom, p));
+  const hits = intersectCurves(curveA, curveB).filter((p) => isPointInDisplayedDomain(geom, view, p));
   const newPts = filterNew2DPoints(geom, doc, /** @type {any} */ (view), hits, 10, canvas);
   if (newPts.length > 0) pushHistory();
   const constraints = [
@@ -1233,20 +1262,25 @@ function projectSphericalPointToStereographicScreen(view, p) {
  * Apply curve constraints to a dragged 2D point.
  *
  * @param {GeometryType} geom
+ * @param {{chartOffsetX?:number, chartOffsetY?:number}} view
  * @param {any} doc
  * @param {{constraints?: Array<{kind:"line"|"circle", id:string}>}} point
  * @param {{x:number,y:number}} w
  * @returns {{x:number,y:number}}
  */
-function apply2DConstraints(geom, doc, point, w) {
+function apply2DConstraints(geom, view, doc, point, w) {
   const constraints = point.constraints;
   if (!constraints || constraints.length === 0) return w;
+  const allowOffscreenIntersections = geom === GeometryType.EUCLIDEAN_PERSPECTIVE && (point.hidden || point.debug);
+  const inDomain = allowOffscreenIntersections
+    ? (p) => isPointInOperationDomain(geom, p)
+    : (p) => isPointInDisplayedDomain(geom, view, p);
 
   if (constraints.length >= 2) {
     const a = get2DCurveFromConstraint(geom, doc, constraints[0]);
     const b = get2DCurveFromConstraint(geom, doc, constraints[1]);
     if (a && b) {
-      const hits = intersectCurves(a, b).filter((p) => is2DPointInDomain(geom, p));
+      const hits = intersectCurves(a, b).filter(inDomain);
       if (hits.length > 0) {
         const hints = point.intersectionHints;
         if (hints && hints.length > 0) {
@@ -1305,7 +1339,7 @@ function apply2DConstraints(geom, doc, point, w) {
       const curve = derive2DLineCurve(geom, doc, line);
       if (!curve) continue;
       const proj = projectWorldToCurve(curve, w);
-      if (!proj || !is2DPointInDomain(geom, proj)) continue;
+      if (!proj || !inDomain(proj)) continue;
       const d = (proj.x - w.x) * (proj.x - w.x) + (proj.y - w.y) * (proj.y - w.y);
       if (d < bestD) {
         bestD = d;
@@ -1318,7 +1352,7 @@ function apply2DConstraints(geom, doc, point, w) {
     const curve = derive2DCircleCurve(geom, doc, circle);
     if (!curve) continue;
     const proj = projectWorldToCurve(curve, w);
-    if (!proj || !is2DPointInDomain(geom, proj)) continue;
+    if (!proj || !inDomain(proj)) continue;
     const d = (proj.x - w.x) * (proj.x - w.x) + (proj.y - w.y) * (proj.y - w.y);
     if (d < bestD) {
       bestD = d;
@@ -1881,7 +1915,7 @@ function pick2DIntersection(
   preHits,
 ) {
   const rawHits = preHits ?? intersectCurves(curveA, curveB);
-  const hits = rawHits.filter((p) => is2DPointInDomain(geom, p));
+  const hits = rawHits.filter((p) => isPointInOperationDomain(geom, p));
   if (hits.length === 0) return null;
   let candidates = hits;
   if (avoidPoints && avoidPoints.length > 0) {
@@ -2256,12 +2290,13 @@ function getSpherePlaneFromConstraint(doc, constraint) {
  * when other defining points move).
  *
  * @param {GeometryType} geom
+ * @param {{chartOffsetX?:number, chartOffsetY?:number}} view
  * @param {any} doc
  */
-function enforce2DConstraints(geom, doc) {
+function enforce2DConstraints(geom, view, doc) {
   for (const pt of doc.points) {
     if (pt.locked || !pt.constraints || pt.constraints.length === 0) continue;
-    const snapped = apply2DConstraints(geom, doc, pt, { x: pt.x, y: pt.y });
+    const snapped = apply2DConstraints(geom, view, doc, pt, { x: pt.x, y: pt.y });
     pt.x = snapped.x;
     pt.y = snapped.y;
   }
@@ -2600,7 +2635,7 @@ function snap2DPointToCurves(geom, doc, view, posScreen, w) {
   const consider = (curve, constraint) => {
     const proj = projectWorldToCurve(curve, w);
     if (!proj) return;
-    if (!is2DPointInDomain(geom, proj)) return;
+    if (!isPointInDisplayedDomain(geom, view, proj)) return;
     const projScreen = projectModelPointToScreen2D(geom, view, proj);
     if (!projScreen) return;
     const dPx = Math.hypot(projScreen.x - posScreen.x, projScreen.y - posScreen.y);

@@ -1,15 +1,16 @@
 import { GeometryType, ToolType, createDefaultView, createEmptyDoc, createInitialState } from "./engine/state.js";
 import { createHistory } from "./engine/history.js";
-import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260207-80";
+import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260208-81";
 import {
   hyperbolicInternalToDisplay2D,
   hyperbolicToPoincarePoint,
   isHyperbolicGeometry,
   poincareToHyperbolicPoint,
-} from "./engine/hyperbolicModels.js?v=20260207-80";
+} from "./engine/hyperbolicModels.js?v=20260208-81";
+import { perspectiveWorldToDisplay } from "./engine/perspectiveView.js?v=20260208-81";
 import { installContextMenu } from "./ui/contextMenu.js";
-import { attachCanvasController } from "./engine/inputController.js?v=20260207-80";
-import { createRenderer } from "./engine/renderer.js?v=20260207-80";
+import { attachCanvasController } from "./engine/inputController.js?v=20260208-81";
+import { createRenderer } from "./engine/renderer.js?v=20260208-81";
 import { makeId } from "./engine/util/ids.js";
 
 /**
@@ -48,7 +49,6 @@ export function createApp(deps) {
   const history = createHistory(state);
   const renderer = createRenderer(deps.canvas, state);
   let lastHistorySignature = "";
-  deps.statusText.style.display = "none";
 
   const setHistoryOpen = (open) => {
     deps.historyPane.classList.toggle("is-collapsed", !open);
@@ -123,8 +123,13 @@ export function createApp(deps) {
     }
   };
 
+  const updateGeometryModelStatus = () => {
+    const { geometry, model } = geometryModelLabels(state.activeGeometry);
+    deps.statusText.textContent = `Geometry: ${geometry} | Model: ${model}`;
+  };
+
   const updateToolHint = () => {
-    const geomLabel = geometryDisplayName(state.activeGeometry);
+    updateGeometryModelStatus();
     if (state.toolBuilder) {
       const stageHint =
         state.toolBuilder.stage === "inputs"
@@ -142,17 +147,17 @@ export function createApp(deps) {
       if (next) {
         const label = next.kind === "point" ? "point" : next.kind === "line" ? "line" : "circle";
         const error = state.toolUseError ? ` (${state.toolUseError})` : "";
-        deps.toolHint.textContent = `${geomLabel}: Select ${label} ${selectedCount + 1} of ${
+        deps.toolHint.textContent = `Select ${label} ${selectedCount + 1} of ${
           customTool.inputs.length
         } for ${customTool.name}.${error}`;
       } else {
-        deps.toolHint.textContent = `${geomLabel}: Applying ${customTool.name}...`;
+        deps.toolHint.textContent = `Applying ${customTool.name}...`;
       }
       return;
     }
 
     if (!state.activeTool) {
-      deps.toolHint.textContent = `${geomLabel}: Select a geometry element, then press Delete to remove it.`;
+      deps.toolHint.textContent = "Select a geometry element, then press Delete to remove it.";
       return;
     }
 
@@ -164,7 +169,7 @@ export function createApp(deps) {
           : state.activeTool === ToolType.CIRCLE
             ? "Click center, then a radius point to create a circle."
             : "Click two lines/circles to create intersection point(s).";
-    deps.toolHint.textContent = `${geomLabel}: ${hint}`;
+    deps.toolHint.textContent = hint;
   };
 
   const applyGeometryChange = (next) => {
@@ -1469,6 +1474,9 @@ function fit2DViewToDoc(canvas, view, geom, doc) {
         if (!Number.isFinite(point.z)) return null;
         return sphereToStereographicPoint({ x: point.x, y: point.y, z: point.z });
       }
+      if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
+        return perspectiveWorldToDisplay({ x: point.x, y: point.y });
+      }
       if (geom === GeometryType.HYPERBOLIC_KLEIN) return hyperbolicInternalToDisplay2D(geom, { x: point.x, y: point.y });
       return { x: point.x, y: point.y };
     })
@@ -1489,7 +1497,7 @@ function fit2DViewToDoc(canvas, view, geom, doc) {
       view.initialized = true;
     } else if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
       view.offsetX = width / 2;
-      view.offsetY = height * 0.35;
+      view.offsetY = height / 2;
       // @ts-ignore - runtime extension set in view2d initializer
       view.modelOffsetX = view.offsetX;
       // @ts-ignore - runtime extension set in view2d initializer
@@ -1532,7 +1540,7 @@ function fit2DViewToDoc(canvas, view, geom, doc) {
 
   view.scale = nextScale;
   view.offsetX = width / 2 - cx * nextScale;
-  view.offsetY = height / 2 + cy * nextScale;
+  view.offsetY = geom === GeometryType.EUCLIDEAN_PERSPECTIVE ? height / 2 : height / 2 + cy * nextScale;
   // Keep fixed-frame models in a consistent projection frame.
   if (
     geom === GeometryType.EUCLIDEAN_PERSPECTIVE ||
@@ -1551,7 +1559,7 @@ function fit2DViewToDoc(canvas, view, geom, doc) {
     if (!Number.isFinite(view.modelOffsetY))
       view.modelOffsetY =
         geom === GeometryType.EUCLIDEAN_PERSPECTIVE
-          ? height * 0.35
+          ? height / 2
           : geom === GeometryType.HYPERBOLIC_HALF_PLANE
             ? height * 0.78
             : height / 2;
@@ -1583,6 +1591,35 @@ function geometryDisplayName(geom) {
       return "Hyperbolic (Hyperboloid)";
     default:
       return geom;
+  }
+}
+
+/**
+ * @param {GeometryType} geom
+ * @returns {{geometry: string, model: string}}
+ */
+function geometryModelLabels(geom) {
+  switch (geom) {
+    case GeometryType.EUCLIDEAN:
+      return { geometry: "Euclidean", model: "Standard" };
+    case GeometryType.EUCLIDEAN_PERSPECTIVE:
+      return { geometry: "Euclidean", model: "Perspective" };
+    case GeometryType.INVERSIVE_EUCLIDEAN:
+      return { geometry: "Euclidean", model: "Inversive" };
+    case GeometryType.SPHERICAL:
+      return { geometry: "Spherical", model: "Standard" };
+    case GeometryType.SPHERICAL_STEREOGRAPHIC:
+      return { geometry: "Spherical", model: "Stereographic" };
+    case GeometryType.HYPERBOLIC_POINCARE:
+      return { geometry: "Hyperbolic", model: "Poincare Disk" };
+    case GeometryType.HYPERBOLIC_HALF_PLANE:
+      return { geometry: "Hyperbolic", model: "Half Plane" };
+    case GeometryType.HYPERBOLIC_KLEIN:
+      return { geometry: "Hyperbolic", model: "Klein" };
+    case GeometryType.HYPERBOLIC_HYPERBOLOID:
+      return { geometry: "Hyperbolic", model: "Hyperboloid" };
+    default:
+      return { geometry: geometryDisplayName(geom), model: "Standard" };
   }
 }
 

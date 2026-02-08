@@ -1,6 +1,6 @@
 import { GeometryType } from "./state.js";
 import { circleThrough3, halfPlaneGeodesic, lineThrough, poincareGeodesic } from "./geom2d.js";
-import { usesPoincareInternalChart } from "./hyperbolicModels.js?v=20260207-80";
+import { usesPoincareInternalChart } from "./hyperbolicModels.js?v=20260208-81";
 import { acosh, clamp, EPS, tanh } from "./util/math.js";
 import { cross3, dot3, len3, norm3 } from "./vec3.js";
 
@@ -86,7 +86,7 @@ export function constrain2DPoint(geom, p) {
     if (p.y <= 0) return { x: p.x, y: 1e-6 };
   }
   if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
-    if (p.y >= 0) return { x: p.x, y: -1e-6 };
+    if (p.y <= 0) return { x: p.x, y: 1e-6 };
   }
   return p;
 }
@@ -233,7 +233,7 @@ export function derive2DCircleCurve(geom, doc, circle) {
 export function is2DPointInDomain(geom, p) {
   if (usesPoincareInternalChart(geom)) return p.x * p.x + p.y * p.y < 1 - 1e-9;
   if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) return p.y > 1e-9;
-  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) return p.y < -1e-9;
+  if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) return p.y > 1e-9;
   return true;
 }
 

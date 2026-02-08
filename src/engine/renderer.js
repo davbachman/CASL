@@ -8,9 +8,9 @@ import {
   poincareToHyperboloid,
   poincareToKlein,
   poincareTranslate,
-} from "./hyperbolicModels.js?v=20260207-79";
-import { hyperboloidViewport } from "./hyperboloidView.js?v=20260207-79";
-import { perspectiveWorldToDisplay } from "./perspectiveView.js?v=20260207-79";
+} from "./hyperbolicModels.js?v=20260208-81";
+import { hyperboloidViewport } from "./hyperboloidView.js?v=20260208-81";
+import { perspectiveDisplayLineFromWorldLine, perspectiveWorldToDisplay } from "./perspectiveView.js?v=20260208-81";
 import { sampleSpherePlanePoints, sphereToStereographic } from "./stereographic.js";
 import { initialize2DViewIfNeeded, worldToScreen } from "./view2d.js";
 import { projectSphere, rotateFromView, rotateToView } from "./sphereView.js";
@@ -78,7 +78,7 @@ export function createRenderer(canvas, state) {
         geom === GeometryType.HYPERBOLIC_HALF_PLANE
           ? { offsetY: (h / dpr) * 0.78 }
           : geom === GeometryType.EUCLIDEAN_PERSPECTIVE
-            ? { offsetY: (h / dpr) * 0.35 }
+            ? { offsetY: (h / dpr) * 0.5 }
             : undefined,
       );
       draw2D(ctx, w, h, dpr, state, doc, /** @type {any} */ (view), geom);
@@ -131,6 +131,8 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
   const diskCenter = { x: getModelAnchorX(view), y: getModelAnchorY(view) };
   const diskR = view.scale;
   const boundaryY = getModelAnchorY(view);
+  // For camera (0,-10,10), world y=0 maps to display y=-10 => +10*scale screen offset.
+  const perspectiveDomainBottomY = Math.min(cssH, boundaryY + view.scale * 10);
   const drawDoc = getDisplayDocForView(geom, doc, view);
   if (!drawDoc || !Array.isArray(drawDoc.points) || !Array.isArray(drawDoc.lines) || !Array.isArray(drawDoc.circles)) {
     ctx.restore();
@@ -166,13 +168,23 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
     ctx.fillStyle = "#edf2fb";
     ctx.fillRect(0, 0, cssW, Math.max(0, boundaryY));
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, boundaryY, cssW, cssH - boundaryY);
+    ctx.fillRect(0, boundaryY, cssW, Math.max(0, perspectiveDomainBottomY - boundaryY));
+    if (perspectiveDomainBottomY < cssH) {
+      ctx.fillStyle = "#f1f5f9";
+      ctx.fillRect(0, perspectiveDomainBottomY, cssW, cssH - perspectiveDomainBottomY);
+    }
     ctx.strokeStyle = "rgba(0,0,0,0.75)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(0, boundaryY);
     ctx.lineTo(cssW, boundaryY);
     ctx.stroke();
+    if (perspectiveDomainBottomY < cssH) {
+      ctx.beginPath();
+      ctx.moveTo(0, perspectiveDomainBottomY);
+      ctx.lineTo(cssW, perspectiveDomainBottomY);
+      ctx.stroke();
+    }
   }
 
   let clippedDisk = false;
@@ -194,7 +206,7 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
     clippedPerspective = true;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, boundaryY, cssW, cssH - boundaryY);
+    ctx.rect(0, boundaryY, cssW, Math.max(0, perspectiveDomainBottomY - boundaryY));
     ctx.clip();
   }
 
@@ -295,6 +307,12 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
     ctx.moveTo(0, boundaryY);
     ctx.lineTo(cssW, boundaryY);
     ctx.stroke();
+    if (perspectiveDomainBottomY < cssH) {
+      ctx.beginPath();
+      ctx.moveTo(0, perspectiveDomainBottomY);
+      ctx.lineTo(cssW, perspectiveDomainBottomY);
+      ctx.stroke();
+    }
   }
 
   ctx.restore();
@@ -320,10 +338,15 @@ function draw2DCircleObject(ctx, view, geom, curve, style, label, isSelected, cs
 
   if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
     if (curve.kind === "line") {
-      const pts = samplePerspectiveLineScreenPoints(view, curve, 80, 420);
-      drawScreenPolylineWithBreaks(ctx, pts, Math.max(cssW, cssH) * 0.85);
-      const lab = labelAnchorWorld ? perspectiveWorldToScreen(view, labelAnchorWorld) : findMidScreenPoint(pts);
-      if (lab) drawCurveLabel(ctx, label, lab.x, lab.y);
+      drawPerspectiveLine(
+        ctx,
+        view,
+        curve,
+        label,
+        cssW,
+        cssH,
+        labelAnchorWorld ? perspectiveWorldToScreen(view, labelAnchorWorld) : null,
+      );
       ctx.restore();
       return;
     }
@@ -421,10 +444,15 @@ function draw2DLineObject(
 
   if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
     if (curve.kind === "line") {
-      const pts = samplePerspectiveLineScreenPoints(view, curve, 80, 420);
-      drawScreenPolylineWithBreaks(ctx, pts, Math.max(cssW, cssH) * 0.85);
-      const lab = labelAnchorWorld ? perspectiveWorldToScreen(view, labelAnchorWorld) : findMidScreenPoint(pts);
-      if (lab) drawCurveLabel(ctx, label, lab.x, lab.y);
+      drawPerspectiveLine(
+        ctx,
+        view,
+        curve,
+        label,
+        cssW,
+        cssH,
+        labelAnchorWorld ? perspectiveWorldToScreen(view, labelAnchorWorld) : null,
+      );
       ctx.restore();
       return;
     }
@@ -1716,25 +1744,30 @@ function perspectiveWorldToScreen(view, p) {
 }
 
 /**
- * @param {any} view
- * @param {{kind:"line",a:number,b:number,c:number}} line
- * @param {number} extent
- * @param {number} steps
- * @returns {Array<{x:number,y:number} | null>}
+ * Draw exact perspective image of a world line using homography coefficients,
+ * then clip it to the current view box.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ * @param {{kind:"line", a:number,b:number,c:number}} worldLine
+ * @param {string} label
+ * @param {number} cssW
+ * @param {number} cssH
+ * @param {{x:number,y:number} | null} labelScreen
  */
-function samplePerspectiveLineScreenPoints(view, line, extent, steps) {
-  const n2 = line.a * line.a + line.b * line.b;
-  if (!(n2 > 1e-12)) return [];
-  const base = { x: -line.a * line.c / n2, y: -line.b * line.c / n2 };
-  const dir = { x: -line.b, y: line.a };
-  /** @type {Array<{x:number,y:number} | null>} */
-  const out = [];
-  for (let i = 0; i <= steps; i++) {
-    const t = -extent + (2 * extent * i) / steps;
-    const w = { x: base.x + dir.x * t, y: base.y + dir.y * t };
-    out.push(perspectiveWorldToScreen(view, w));
-  }
-  return out;
+function drawPerspectiveLine(ctx, view, worldLine, label, cssW, cssH, labelScreen) {
+  const displayLine = perspectiveDisplayLineFromWorldLine(worldLine);
+  if (!displayLine) return;
+  const seg = clipLineToView(displayLine, view, cssW, cssH);
+  if (!seg) return;
+  const a = worldToScreen(view, seg.a);
+  const b = worldToScreen(view, seg.b);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  const lab = labelScreen ?? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  drawCurveLabel(ctx, label, lab.x, lab.y);
 }
 
 /**

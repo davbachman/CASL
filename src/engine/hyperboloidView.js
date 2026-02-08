@@ -4,7 +4,7 @@ import {
   poincareToHyperboloid,
   poincareTranslate,
   poincareTranslateInverse,
-} from "./hyperbolicModels.js?v=20260207-80";
+} from "./hyperbolicModels.js?v=20260208-81";
 import { rotateFromView, rotateToView } from "./sphereView.js";
 
 /** @typedef {{x:number,y:number}} Vec2 */

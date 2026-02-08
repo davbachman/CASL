@@ -4,15 +4,18 @@
 const CAMERA_Y = -10;
 const CAMERA_Z = 10;
 const EPS = 1e-9;
+const WORLD_MIN_Y = 0;
 
 /**
  * Project XY-plane geometry (z=0) from camera C=(0,-10,10) onto the XZ-plane
  * (y=0). Returned 2D coords are (X, Z-10), so the horizon is y=0.
+ * Only world points with y>0 are in-domain for this model.
  *
  * @param {Vec2} p
  * @returns {Vec2 | null}
  */
 export function perspectiveWorldToDisplay(p) {
+  if (!(p.y > WORLD_MIN_Y + EPS)) return null;
   const den = p.y - CAMERA_Y;
   if (!(den > EPS)) return null;
   const x = (CAMERA_Z * p.x) / den;
@@ -29,7 +32,8 @@ export function perspectiveWorldToDisplay(p) {
  * @returns {Vec2 | null}
  */
 export function perspectiveDisplayToWorld(d) {
-  if (!(d.y < -EPS)) return null;
+  const minDisplayY = -CAMERA_Z;
+  if (!(d.y < -EPS && d.y > minDisplayY + EPS)) return null;
   const den = d.y;
   const x = (-CAMERA_Z * d.x) / den;
   const y = (CAMERA_Z * CAMERA_Y) / den + CAMERA_Y;

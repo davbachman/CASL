@@ -24,6 +24,7 @@ Core invariants
 8. After any mutation/remap, history/object refs must remain valid (`sanitizeConvertedDoc` behavior).
 9. `state.showSteps` controls visibility of debug intermediates; hidden means not rendered.
 10. Menu behavior is selector-driven; keep `index.html` `data-action` values aligned with `src/main.js`.
+11. Geometry/model status text is always shown in top toolbar `#statusText`; sidebar `#toolHint` contains tool guidance only.
 
 Interaction rules
 - Active tool may be empty (`""`): canvas clicks select existing geometry instead of constructing.
@@ -35,6 +36,8 @@ Rendering/model rules
 - `view.kind === "sphere"` only for spherical and hyperboloid models; others use `view.kind === "2d"`.
 - Model-domain clipping is mandatory (disk, half-plane boundary, perspective ground region, hyperboloid rim).
 - Keep hyperboloid axis vertical (`enforceHyperboloidAxis` forces yaw semantics).
+- Euclidean perspective uses camera `(0,-10,10)` projection with world-domain `y>0`; horizon stays anchored at viewport mid-height.
+- In perspective, interaction/display filters use displayed-domain checks, but geometric solving for hidden/debug tool intermediates may use full operation-domain intersections to preserve incidences.
 
 Change hygiene rules
 - Keep module export names stable across `src/engine/*` imports; update all callers in the same change.
