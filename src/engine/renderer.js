@@ -8,9 +8,13 @@ import {
   poincareToHyperboloid,
   poincareToKlein,
   poincareTranslate,
-} from "./hyperbolicModels.js?v=20260208-81";
-import { hyperboloidViewport } from "./hyperboloidView.js?v=20260208-81";
-import { perspectiveDisplayLineFromWorldLine, perspectiveWorldToDisplay } from "./perspectiveView.js?v=20260208-81";
+} from "./hyperbolicModels.js?v=20260208-88";
+import { hyperboloidViewport } from "./hyperboloidView.js?v=20260208-88";
+import {
+  perspectiveDisplayDomainMinY,
+  perspectiveDisplayLineFromWorldLine,
+  perspectiveWorldToDisplay,
+} from "./perspectiveView.js?v=20260208-88";
 import { sampleSpherePlanePoints, sphereToStereographic } from "./stereographic.js";
 import { initialize2DViewIfNeeded, worldToScreen } from "./view2d.js";
 import { projectSphere, rotateFromView, rotateToView } from "./sphereView.js";
@@ -131,8 +135,9 @@ function draw2D(ctx, w, h, dpr, state, doc, view, geom) {
   const diskCenter = { x: getModelAnchorX(view), y: getModelAnchorY(view) };
   const diskR = view.scale;
   const boundaryY = getModelAnchorY(view);
-  // For camera (0,-10,10), world y=0 maps to display y=-10 => +10*scale screen offset.
-  const perspectiveDomainBottomY = Math.min(cssH, boundaryY + view.scale * 10);
+  // Projected perspective domain depth is derived from camera constants.
+  const perspectiveDepth = Math.max(0, -perspectiveDisplayDomainMinY());
+  const perspectiveDomainBottomY = Math.min(cssH, boundaryY + view.scale * perspectiveDepth);
   const drawDoc = getDisplayDocForView(geom, doc, view);
   if (!drawDoc || !Array.isArray(drawDoc.points) || !Array.isArray(drawDoc.lines) || !Array.isArray(drawDoc.circles)) {
     ctx.restore();

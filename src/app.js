@@ -1,16 +1,16 @@
 import { GeometryType, ToolType, createDefaultView, createEmptyDoc, createInitialState } from "./engine/state.js";
 import { createHistory } from "./engine/history.js";
-import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260208-81";
+import { buildCustomToolDefinition } from "./engine/toolBuilder.js?v=20260208-88";
 import {
   hyperbolicInternalToDisplay2D,
   hyperbolicToPoincarePoint,
   isHyperbolicGeometry,
   poincareToHyperbolicPoint,
-} from "./engine/hyperbolicModels.js?v=20260208-81";
-import { perspectiveWorldToDisplay } from "./engine/perspectiveView.js?v=20260208-81";
+} from "./engine/hyperbolicModels.js?v=20260208-88";
+import { perspectiveWorldToDisplay } from "./engine/perspectiveView.js?v=20260208-88";
 import { installContextMenu } from "./ui/contextMenu.js";
-import { attachCanvasController } from "./engine/inputController.js?v=20260208-81";
-import { createRenderer } from "./engine/renderer.js?v=20260208-81";
+import { attachCanvasController } from "./engine/inputController.js?v=20260208-88";
+import { createRenderer } from "./engine/renderer.js?v=20260208-88";
 import { makeId } from "./engine/util/ids.js";
 
 /**

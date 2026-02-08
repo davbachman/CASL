@@ -1,6 +1,6 @@
 import { GeometryType } from "./state.js";
 import { circleThrough3, halfPlaneGeodesic, lineThrough, poincareGeodesic } from "./geom2d.js";
-import { usesPoincareInternalChart } from "./hyperbolicModels.js?v=20260208-81";
+import { usesPoincareInternalChart } from "./hyperbolicModels.js?v=20260208-88";
 import { acosh, clamp, EPS, tanh } from "./util/math.js";
 import { cross3, dot3, len3, norm3 } from "./vec3.js";
 

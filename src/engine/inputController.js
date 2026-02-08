@@ -17,12 +17,14 @@ import {
   hyperbolicInternalToDisplay2D,
   poincareTranslate,
   poincareTranslateInverse,
-} from "./hyperbolicModels.js?v=20260208-81";
-import { hyperboloidViewport, projectPoincareOnHyperboloid, screenToHyperboloidPoincare } from "./hyperboloidView.js?v=20260208-81";
+} from "./hyperbolicModels.js?v=20260208-88";
+import { hyperboloidViewport, projectPoincareOnHyperboloid, screenToHyperboloidPoincare } from "./hyperboloidView.js?v=20260208-88";
 import {
+  perspectiveDisplayDomainMinY,
+  perspectiveDisplayLineFromWorldLine,
   perspectiveDisplayToWorld,
   perspectiveWorldToDisplay,
-} from "./perspectiveView.js?v=20260208-81";
+} from "./perspectiveView.js?v=20260208-88";
 import { sampleSpherePlanePoints, sphereToStereographic, stereographicToSphere } from "./stereographic.js";
 import { makeId } from "./util/ids.js";
 import { initialize2DViewIfNeeded, pan2D, screenToWorld, worldToScreen, zoom2DAt } from "./view2d.js";
@@ -108,15 +110,53 @@ function panHalfPlaneOrigin(view, dxPx, dyPx) {
 }
 
 /**
- * @param {{chartOffsetX?:number, chartOffsetY?:number, scale:number}} view
- * @param {number} dxPx
- * @param {number} dyPx
+ * Clamp display-space y used for perspective panning away from the singular horizon
+ * and from the lower clipping boundary.
+ *
+ * @param {{scale:number}} view
+ * @param {number} displayY
+ * @returns {number}
  */
-function panPerspectiveOrigin(view, dxPx, dyPx) {
-  const speed = 1 / Math.max(40, view.scale || 1);
+function clampPerspectiveDisplayYForPan(view, displayY) {
+  const minY = perspectiveDisplayDomainMinY() + 1e-4;
+  const guardPx = 36;
+  const guardWorld = guardPx / Math.max(1, view.scale || 1);
+  const maxY = -Math.max(0.4, guardWorld);
+  if (maxY <= minY) return (minY + maxY) * 0.5;
+  return Math.max(minY, Math.min(maxY, displayY));
+}
+
+/**
+ * Keep perspective panning "under cursor" by preserving the same internal model
+ * point between two pointer positions.
+ *
+ * @param {{chartOffsetX?:number, chartOffsetY?:number, scale:number, offsetX:number, offsetY:number}} view
+ * @param {{x:number,y:number}} fromPos
+ * @param {{x:number,y:number}} toPos
+ */
+function panPerspectiveOrigin(view, fromPos, toPos) {
+  const fromDisplayRaw = screenToWorld(view, fromPos);
+  const toDisplayRaw = screenToWorld(view, toPos);
+  const fromDisplay = { x: fromDisplayRaw.x, y: clampPerspectiveDisplayYForPan(view, fromDisplayRaw.y) };
+  const toDisplay = { x: toDisplayRaw.x, y: clampPerspectiveDisplayYForPan(view, toDisplayRaw.y) };
+  const fromShown = perspectiveDisplayToWorld(fromDisplay);
+  const toShown = perspectiveDisplayToWorld(toDisplay);
   const o = getChartOffset(view);
-  view.chartOffsetX = o.x + dxPx * speed;
-  view.chartOffsetY = o.y - dyPx * speed;
+
+  // If either side is outside perspective display domain, fall back to
+  // approximate linear panning so drag still works.
+  if (!fromShown || !toShown) {
+    const dxPx = toPos.x - fromPos.x;
+    const dyPx = toPos.y - fromPos.y;
+    const speed = 1 / Math.max(40, view.scale || 1);
+    view.chartOffsetX = o.x + dxPx * speed;
+    view.chartOffsetY = o.y - dyPx * speed;
+    return;
+  }
+
+  const anchorInternal = { x: fromShown.x - o.x, y: fromShown.y - o.y };
+  view.chartOffsetX = toShown.x - anchorInternal.x;
+  view.chartOffsetY = toShown.y - anchorInternal.y;
 }
 
 /**
@@ -316,7 +356,7 @@ export function attachCanvasController(canvas, deps) {
       } else if (geom === GeometryType.HYPERBOLIC_HALF_PLANE) {
         panHalfPlaneOrigin(/** @type {any} */ (view), dx, dy);
       } else if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
-        panPerspectiveOrigin(/** @type {any} */ (view), dx, dy);
+        panPerspectiveOrigin(/** @type {any} */ (view), downAt, pos);
       } else if (usesFixedFramePanGeometry(geom)) {
         pan2D(/** @type {any} */ (view), dx, dy);
       } else if (isOrbitalGeometry(geom)) rotateByDrag(/** @type {any} */ (view), dx, dy);
@@ -638,6 +678,9 @@ function hitTestCurve(state, geom, pos, canvas) {
   }
   if (geom === GeometryType.EUCLIDEAN_PERSPECTIVE) {
     const v2d = /** @type {any} */ (view);
+    const rect = canvas.getBoundingClientRect();
+    const cssW = rect.width;
+    const cssH = rect.height;
     /** @type {null | {kind:"line"|"circle", id:string}} */
     let best = null;
     let bestDPx = thresholdPx;
@@ -645,7 +688,7 @@ function hitTestCurve(state, geom, pos, canvas) {
       if (line.hidden) continue;
       const curve = derive2DLineCurve(geom, doc, line);
       if (!curve) continue;
-      const dPx = distanceToPerspectiveCurvePx(v2d, pos, curve);
+      const dPx = distanceToPerspectiveCurvePx(v2d, pos, curve, cssW, cssH);
       if (dPx < bestDPx) {
         bestDPx = dPx;
         best = { kind: "line", id: line.id };
@@ -655,7 +698,7 @@ function hitTestCurve(state, geom, pos, canvas) {
       if (circle.hidden) continue;
       const curve = derive2DCircleCurve(geom, doc, circle);
       if (!curve) continue;
-      const dPx = distanceToPerspectiveCurvePx(v2d, pos, curve);
+      const dPx = distanceToPerspectiveCurvePx(v2d, pos, curve, cssW, cssH);
       if (dPx < bestDPx) {
         bestDPx = dPx;
         best = { kind: "circle", id: circle.id };
@@ -2457,26 +2500,22 @@ function distanceToHyperboloidCurvePx(view, vp, posScreen, curve, geodesic) {
 }
 
 /**
- * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number}} view
+ * @param {{kind:"2d", scale:number, offsetX:number, offsetY:number, chartOffsetX?:number, chartOffsetY?:number}} view
  * @param {{x:number,y:number}} posScreen
  * @param {import("./geom2d.js").Curve2D} curve
+ * @param {number} cssW
+ * @param {number} cssH
  */
-function distanceToPerspectiveCurvePx(view, posScreen, curve) {
+function distanceToPerspectiveCurvePx(view, posScreen, curve, cssW, cssH) {
   if (curve.kind === "line") {
-    /** @type {Array<{x:number,y:number} | null>} */
-    const screenPts = [];
-    const steps = 220;
-    const extent = 40;
-    const n2 = curve.a * curve.a + curve.b * curve.b;
-    if (!(n2 > 1e-12)) return Infinity;
-    const base = { x: -curve.a * curve.c / n2, y: -curve.b * curve.c / n2 };
-    const dir = { x: -curve.b, y: curve.a };
-    for (let i = 0; i <= steps; i++) {
-      const t = -extent + (2 * extent * i) / steps;
-      const w = { x: base.x + dir.x * t, y: base.y + dir.y * t };
-      screenPts.push(projectModelPointToScreen2D(GeometryType.EUCLIDEAN_PERSPECTIVE, view, w));
-    }
-    return distanceToScreenPolylineWithBreaks(posScreen, screenPts);
+    const shifted = perspectiveShiftedLine(curve, view);
+    const displayLine = perspectiveDisplayLineFromWorldLine(shifted);
+    if (!displayLine) return Infinity;
+    const seg = clipLineToViewRect(displayLine, view, cssW, cssH);
+    if (!seg) return Infinity;
+    const a = worldToScreen(view, seg.a);
+    const b = worldToScreen(view, seg.b);
+    return distancePointToSegment(posScreen, a, b);
   }
 
   /** @type {Array<{x:number,y:number} | null>} */
@@ -2488,6 +2527,66 @@ function distanceToPerspectiveCurvePx(view, posScreen, curve) {
     screenPts.push(projectModelPointToScreen2D(GeometryType.EUCLIDEAN_PERSPECTIVE, view, w));
   }
   return distanceToScreenPolylineWithBreaks(posScreen, screenPts);
+}
+
+/**
+ * @param {{kind:"line", a:number,b:number,c:number}} line
+ * @param {{chartOffsetX?:number, chartOffsetY?:number}} view
+ * @returns {{kind:"line", a:number,b:number,c:number}}
+ */
+function perspectiveShiftedLine(line, view) {
+  const t = getChartOffset(view);
+  return { kind: "line", a: line.a, b: line.b, c: line.c - line.a * t.x - line.b * t.y };
+}
+
+/**
+ * Clip line to current 2D view rectangle in world/display coordinates.
+ *
+ * @param {{kind:"line", a:number,b:number,c:number}} line
+ * @param {{scale:number, offsetX:number, offsetY:number}} view
+ * @param {number} cssW
+ * @param {number} cssH
+ * @returns {{a:{x:number,y:number},b:{x:number,y:number}} | null}
+ */
+function clipLineToViewRect(line, view, cssW, cssH) {
+  const minX = (0 - view.offsetX) / view.scale;
+  const maxX = (cssW - view.offsetX) / view.scale;
+  const maxY = (0 - view.offsetY) / -view.scale;
+  const minY = (cssH - view.offsetY) / -view.scale;
+
+  const edges = [
+    { kind: "line", a: 1, b: 0, c: -minX },
+    { kind: "line", a: 1, b: 0, c: -maxX },
+    { kind: "line", a: 0, b: 1, c: -minY },
+    { kind: "line", a: 0, b: 1, c: -maxY },
+  ];
+  /** @type {{x:number,y:number}[]} */
+  const pts = [];
+  for (const e of edges) {
+    const hits = intersectCurves(line, e);
+    for (const p of hits) {
+      if (p.x >= minX - 1e-6 && p.x <= maxX + 1e-6 && p.y >= minY - 1e-6 && p.y <= maxY + 1e-6) {
+        pts.push(p);
+      }
+    }
+  }
+  if (pts.length < 2) return null;
+  let bestI = 0;
+  let bestJ = 1;
+  let bestD = -Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const dx = pts[i].x - pts[j].x;
+      const dy = pts[i].y - pts[j].y;
+      const d = dx * dx + dy * dy;
+      if (d > bestD) {
+        bestD = d;
+        bestI = i;
+        bestJ = j;
+      }
+    }
+  }
+  return { a: pts[bestI], b: pts[bestJ] };
 }
 
 /**

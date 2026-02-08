@@ -1,13 +1,13 @@
 /** @typedef {{x:number,y:number}} Vec2 */
 /** @typedef {{kind:"line",a:number,b:number,c:number}} Line2D */
 
-const CAMERA_Y = -10;
+const CAMERA_Y = -40;
 const CAMERA_Z = 10;
 const EPS = 1e-9;
 const WORLD_MIN_Y = 0;
 
 /**
- * Project XY-plane geometry (z=0) from camera C=(0,-10,10) onto the XZ-plane
+ * Project XY-plane geometry (z=0) from camera C=(0,-40,10) onto the XZ-plane
  * (y=0). Returned 2D coords are (X, Z-10), so the horizon is y=0.
  * Only world points with y>0 are in-domain for this model.
  *
@@ -35,7 +35,7 @@ export function perspectiveDisplayToWorld(d) {
   const minDisplayY = -CAMERA_Z;
   if (!(d.y < -EPS && d.y > minDisplayY + EPS)) return null;
   const den = d.y;
-  const x = (-CAMERA_Z * d.x) / den;
+  const x = (CAMERA_Y * d.x) / den;
   const y = (CAMERA_Z * CAMERA_Y) / den + CAMERA_Y;
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   return { x, y };
@@ -49,6 +49,14 @@ export function perspectiveSkew() {
 }
 
 /**
+ * Lowest visible display y-value (horizon is 0).
+ * @returns {number}
+ */
+export function perspectiveDisplayDomainMinY() {
+  return -CAMERA_Z;
+}
+
+/**
  * Exact image line in display coordinates for a world-space line under the
  * perspective homography used above.
  *
@@ -56,8 +64,13 @@ export function perspectiveSkew() {
  * @returns {Line2D | null}
  */
 export function perspectiveDisplayLineFromWorldLine(line) {
-  const a = -CAMERA_Z * line.a;
-  const b = line.c - CAMERA_Z * line.b;
+  // General line transform under:
+  // X = CAMERA_Z * x / (y - CAMERA_Y)
+  // Y = CAMERA_Z * y / (y - CAMERA_Y) - CAMERA_Z
+  // gives display-line coefficients proportional to:
+  // (CAMERA_Y * a) X + (CAMERA_Y * b + c) Y + (CAMERA_Y * CAMERA_Z * b) = 0
+  const a = CAMERA_Y * line.a;
+  const b = CAMERA_Y * line.b + line.c;
   const c = CAMERA_Y * CAMERA_Z * line.b;
   const n = Math.hypot(a, b);
   if (!(n > EPS)) return null;

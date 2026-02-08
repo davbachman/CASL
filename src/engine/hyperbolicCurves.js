@@ -1,5 +1,5 @@
 import { intersectCurves } from "./geom2d.js";
-import { isInsidePoincareDisk } from "./hyperbolicModels.js?v=20260208-81";
+import { isInsidePoincareDisk } from "./hyperbolicModels.js?v=20260208-88";
 
 /** @typedef {{x:number,y:number}} Vec2 */
 /** @typedef {{kind:"line", a:number,b:number,c:number} | {kind:"circle", cx:number,cy:number,r:number}} Curve2D */

@@ -36,7 +36,10 @@ Rendering/model rules
 - `view.kind === "sphere"` only for spherical and hyperboloid models; others use `view.kind === "2d"`.
 - Model-domain clipping is mandatory (disk, half-plane boundary, perspective ground region, hyperboloid rim).
 - Keep hyperboloid axis vertical (`enforceHyperboloidAxis` forces yaw semantics).
-- Euclidean perspective uses camera `(0,-10,10)` projection with world-domain `y>0`; horizon stays anchored at viewport mid-height.
+- Euclidean perspective uses camera `(0,-40,10)` projection with world-domain `y>0`; horizon stays anchored at viewport mid-height.
+- Perspective inverse mapping must satisfy round-trip with forward mapping (notably, inverse `x` uses `CAMERA_Y`, not `CAMERA_Z`).
+- Perspective line rendering/hit testing must use the exact transformed line (`perspectiveDisplayLineFromWorldLine`) with chart-offset-aware coefficients; avoid finite sampling for line pick accuracy.
+- Perspective pan is pointer-anchored but must clamp display-y away from the horizon singularity during inverse solves.
 - In perspective, interaction/display filters use displayed-domain checks, but geometric solving for hidden/debug tool intermediates may use full operation-domain intersections to preserve incidences.
 
 Change hygiene rules
