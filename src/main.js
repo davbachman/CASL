@@ -1,4 +1,4 @@
-import { createApp } from "./app.js?v=20260208-88";
+import { createApp } from "./app.js?v=20260209-89";
 
 const deps = {
   canvas: /** @type {HTMLCanvasElement} */ (document.getElementById("canvas")),
@@ -102,6 +102,14 @@ async function runMenuAction(item) {
     }
   }
   if (action === "import-construction") app.importConstruction();
+  if (action === "export-image") {
+    try {
+      await app.exportImage();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unable to export image.";
+      window.alert(`Export image failed: ${msg}`);
+    }
+  }
   if (action === "save-tools") {
     try {
       await app.saveTools();

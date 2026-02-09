@@ -368,6 +368,14 @@ export function createApp(deps) {
     deps.importConstructionInput.click();
   };
 
+  const exportImage = async () => {
+    const filename = `construction-${dateStamp()}.png`;
+    renderer.requestRender(true);
+    renderer.drawIfNeeded();
+    const blob = await canvasToPngBlob(deps.canvas);
+    await savePngFileWithDialog(filename, blob);
+  };
+
   deps.showStepsButton.addEventListener("click", toggleShowSteps);
 
   deps.saveToolsButton.addEventListener("click", () => {
@@ -628,6 +636,7 @@ export function createApp(deps) {
     importTools: openImportToolsDialog,
     saveConstruction,
     importConstruction: openImportConstructionDialog,
+    exportImage,
     setGeometry: (geom) => {
       deps.geometrySelect.value = geom;
       applyGeometryChange(geom);
@@ -680,6 +689,31 @@ async function saveJsonFileWithDialog(filename, payload) {
   }
 
   downloadJsonFile(filename, payload);
+}
+
+/**
+ * @param {string} filename
+ * @param {Blob} blob
+ */
+async function savePngFileWithDialog(filename, blob) {
+  const modernSaved = await tryModernSavePickerBlob(filename, blob, {
+    description: "PNG Image",
+    accept: { "image/png": [".png"] },
+  });
+  if (modernSaved === "saved" || modernSaved === "cancelled") return;
+
+  const legacySaved = await tryLegacySavePickerBlob(filename, blob, {
+    description: "PNG Image",
+    extensions: ["png"],
+    mimeTypes: ["image/png"],
+  });
+  if (legacySaved === "saved" || legacySaved === "cancelled") return;
+
+  if (modernSaved === "blocked") {
+    throw new Error("Native save dialog is blocked in this browser context.");
+  }
+
+  downloadBlobFile(filename, blob);
 }
 
 /**
@@ -747,6 +781,73 @@ async function tryLegacySavePicker(filename, json) {
         writer.onerror = reject;
         writer.onwriteend = resolve;
         writer.write(0, new Blob([json], { type: "application/json" }));
+      });
+      if (typeof writer.close === "function") writer.close();
+      return "saved";
+    }
+    return "unsupported";
+  } catch (err) {
+    if (isAbortError(err)) return "cancelled";
+    throw err;
+  }
+}
+
+/**
+ * @param {string} filename
+ * @param {Blob} blob
+ * @param {{description: string, accept: Record<string, string[]>}} typeInfo
+ * @returns {Promise<"saved"|"cancelled"|"unsupported"|"blocked">}
+ */
+async function tryModernSavePickerBlob(filename, blob, typeInfo) {
+  // @ts-ignore - not all browsers expose this type
+  const picker = window.showSaveFilePicker;
+  if (typeof picker !== "function") return "unsupported";
+  try {
+    const handle = await picker({
+      suggestedName: filename,
+      types: [typeInfo],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return "saved";
+  } catch (err) {
+    if (isAbortError(err)) return "cancelled";
+    if (isPermissionError(err)) return "blocked";
+    throw err;
+  }
+}
+
+/**
+ * @param {string} filename
+ * @param {Blob} blob
+ * @param {{description: string, extensions: string[], mimeTypes: string[]}} typeInfo
+ * @returns {Promise<"saved"|"cancelled"|"unsupported">}
+ */
+async function tryLegacySavePickerBlob(filename, blob, typeInfo) {
+  // @ts-ignore - legacy Chromium API
+  const picker = window.chooseFileSystemEntries;
+  if (typeof picker !== "function") return "unsupported";
+  try {
+    // @ts-ignore - legacy Chromium API shape
+    const handle = await picker({
+      type: "save-file",
+      suggestedName: filename,
+      accepts: [typeInfo],
+    });
+
+    if (typeof handle.createWritable === "function") {
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return "saved";
+    }
+    if (typeof handle.createWriter === "function") {
+      const writer = await handle.createWriter();
+      await new Promise((resolve, reject) => {
+        writer.onerror = reject;
+        writer.onwriteend = resolve;
+        writer.write(0, blob);
       });
       if (typeof writer.close === "function") writer.close();
       return "saved";
@@ -847,6 +948,14 @@ function openSafariSaveHelper(filename, json) {
  */
 function downloadJsonFile(filename, payload) {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  downloadBlobFile(filename, blob);
+}
+
+/**
+ * @param {string} filename
+ * @param {Blob} blob
+ */
+function downloadBlobFile(filename, blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -864,6 +973,30 @@ function downloadJsonFile(filename, payload) {
 async function readJsonFile(file) {
   const text = await file.text();
   return JSON.parse(text);
+}
+
+/**
+ * @param {HTMLCanvasElement} canvas
+ * @returns {Promise<Blob>}
+ */
+function canvasToPngBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    if (typeof canvas.toBlob !== "function") {
+      reject(new Error("Canvas export is not supported in this browser."));
+      return;
+    }
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error("Unable to encode PNG image."));
+          return;
+        }
+        resolve(blob);
+      },
+      "image/png",
+      1,
+    );
+  });
 }
 
 /** @param {string} s */
