@@ -1274,21 +1274,21 @@ function drawHyperboloidCurve(ctx, view, vp, points, style, label, isSelected) {
   ctx.save();
   ctx.strokeStyle = style.color;
   ctx.lineWidth = isSelected ? 3 : 2;
-  const maxR2 = HYPERBOLOID_SURFACE_RADIUS * HYPERBOLOID_SURFACE_RADIUS + 1e-9;
+  const radius = HYPERBOLOID_SURFACE_RADIUS;
 
   /** @type {Array<{x:number,y:number,depth:number,normal:{x:number,y:number,z:number},frontFacing:boolean} | null>} */
   const screenPts = [];
   /** @type {boolean[]} */
   const frontMask = [];
-  for (const p of points) {
-    const shifted = applyHyperboloidChartOffset(view, p);
-    const shiftedR2 = shifted.x * shifted.x + shifted.y * shifted.y;
-    if (shiftedR2 > maxR2) {
+  const shifted = points.map((p) => applyHyperboloidChartOffset(view, p));
+  const clipped = clipHyperboloidCurveToRim(shifted, radius);
+  for (const p of clipped) {
+    if (!p) {
       screenPts.push(null);
       frontMask.push(false);
       continue;
     }
-    const s = projectHyperboloidVertex(view, vp, shifted, true);
+    const s = projectHyperboloidVertex(view, vp, p, true);
     if (!s) {
       screenPts.push(null);
       frontMask.push(false);
@@ -1322,6 +1322,103 @@ function drawHyperboloidCurve(ctx, view, vp, points, style, label, isSelected) {
     drawCurveLabel(ctx, label, mid.x, mid.y);
   }
   ctx.restore();
+}
+
+/**
+ * Clip a sampled hyperboloid curve (in shifted Poincare coordinates) to the
+ * rendered surface rim and preserve segment breaks with null sentinels.
+ *
+ * @param {Array<{x:number,y:number}>} pts
+ * @param {number} radius
+ * @returns {Array<{x:number,y:number} | null>}
+ */
+function clipHyperboloidCurveToRim(pts, radius) {
+  if (pts.length === 0) return [];
+  const radiusSq = radius * radius;
+  const eps = 1e-12;
+  /** @type {Array<{x:number,y:number} | null>} */
+  const out = [];
+
+  /**
+   * @param {{x:number,y:number}} p
+   */
+  const isInside = (p) => p.x * p.x + p.y * p.y <= radiusSq + 1e-9;
+
+  /**
+   * @param {{x:number,y:number}} a
+   * @param {{x:number,y:number}} b
+   * @returns {number[]}
+   */
+  const segmentRoots = (a, b) => {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const A = dx * dx + dy * dy;
+    if (A <= eps) return [];
+    const B = 2 * (a.x * dx + a.y * dy);
+    const C = a.x * a.x + a.y * a.y - radiusSq;
+    const disc = B * B - 4 * A * C;
+    if (disc < 0) return [];
+    const sd = Math.sqrt(Math.max(0, disc));
+    const t1 = (-B - sd) / (2 * A);
+    const t2 = (-B + sd) / (2 * A);
+    /** @type {number[]} */
+    const roots = [];
+    for (const t of [t1, t2]) {
+      if (t > eps && t < 1 - eps) roots.push(t);
+    }
+    roots.sort((m, n) => m - n);
+    if (roots.length === 2 && Math.abs(roots[1] - roots[0]) < 1e-8) return [roots[0]];
+    return roots;
+  };
+
+  /**
+   * @param {{x:number,y:number}} a
+   * @param {{x:number,y:number}} b
+   * @param {number} t
+   */
+  const lerp = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+
+  const appendPoint = (p) => {
+    const last = out[out.length - 1];
+    if (last && Math.hypot(last.x - p.x, last.y - p.y) < 1e-9) return;
+    out.push(p);
+  };
+
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const aInside = isInside(a);
+    const bInside = isInside(b);
+    const roots = segmentRoots(a, b);
+
+    if (aInside && bInside) {
+      if (out.length === 0 || out[out.length - 1] === null) appendPoint(a);
+      appendPoint(b);
+      continue;
+    }
+
+    if (aInside && !bInside) {
+      if (out.length === 0 || out[out.length - 1] === null) appendPoint(a);
+      if (roots.length > 0) appendPoint(lerp(a, b, roots[0]));
+      out.push(null);
+      continue;
+    }
+
+    if (!aInside && bInside) {
+      if (roots.length > 0) appendPoint(lerp(a, b, roots[roots.length - 1]));
+      appendPoint(b);
+      continue;
+    }
+
+    if (roots.length === 2) {
+      appendPoint(lerp(a, b, roots[0]));
+      appendPoint(lerp(a, b, roots[1]));
+      out.push(null);
+    }
+  }
+
+  while (out.length > 0 && out[out.length - 1] === null) out.pop();
+  return out;
 }
 
 /**
