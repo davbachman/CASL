@@ -255,6 +255,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .sidebar-title {
@@ -266,6 +269,18 @@ body {
 }
 
 #customToolsTitle {
+  display: none;
+}
+
+#customToolList {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  overscroll-behavior: contain;
+}
+
+#customToolList:empty {
   display: none;
 }
 
