@@ -1325,12 +1325,37 @@ function apply2DConstraints(geom, view, doc, point, w) {
     if (a && b) {
       const hits = intersectCurves(a, b).filter(inDomain);
       if (hits.length > 0) {
+        let candidates = hits;
+        if (hits.length > 1) {
+          const keyA = `${constraints[0].kind}:${constraints[0].id}`;
+          const keyB = `${constraints[1].kind}:${constraints[1].id}`;
+          const pairKey = keyA < keyB ? `${keyA}|${keyB}` : `${keyB}|${keyA}`;
+          const siblingPoints = (doc.points ?? []).filter((other) => {
+            if (other.id === point.id) return false;
+            if (!other.constraints || other.constraints.length < 2) return false;
+            const otherA = `${other.constraints[0].kind}:${other.constraints[0].id}`;
+            const otherB = `${other.constraints[1].kind}:${other.constraints[1].id}`;
+            const otherPairKey = otherA < otherB ? `${otherA}|${otherB}` : `${otherB}|${otherA}`;
+            return otherPairKey === pairKey;
+          });
+          if (siblingPoints.length > 0) {
+            const eps2 = 1e-10;
+            const filtered = hits.filter((h) =>
+              siblingPoints.every((s) => {
+                const dx = h.x - s.x;
+                const dy = h.y - s.y;
+                return dx * dx + dy * dy > eps2;
+              }),
+            );
+            if (filtered.length > 0) candidates = filtered;
+          }
+        }
         const hints = point.intersectionHints;
         if (hints && hints.length > 0) {
           const hintMap = new Map(hints.map((h) => [h.id, h]));
           let best = null;
           let bestScore = Infinity;
-          for (const h of hits) {
+          for (const h of candidates) {
             let score = 0;
             let used = false;
             const hA = hintMap.get(constraints[0].id);
@@ -1356,9 +1381,9 @@ function apply2DConstraints(geom, view, doc, point, w) {
           }
           if (best) return best;
         }
-        let best = hits[0];
+        let best = candidates[0];
         let bestD = Infinity;
-        for (const h of hits) {
+        for (const h of candidates) {
           const dx = h.x - w.x;
           const dy = h.y - w.y;
           const d = dx * dx + dy * dy;
@@ -1973,7 +1998,7 @@ function pick2DIntersection(
     if (filtered.length > 0) candidates = filtered;
   }
   if (lineSide) {
-    const filtered = hits.filter((h) => {
+    const filtered = candidates.filter((h) => {
       const value = lineSide.lineCurve.a * h.x + lineSide.lineCurve.b * h.y + lineSide.lineCurve.c;
       const sign = Math.sign(value);
       return sign !== 0 && sign === lineSide.sign;
@@ -1982,7 +2007,7 @@ function pick2DIntersection(
     if (filtered.length > 1) candidates = filtered;
   }
   if (circleSide) {
-    const filtered = hits.filter((h) => {
+    const filtered = candidates.filter((h) => {
       const cross =
         (circleSide.centerB.x - circleSide.centerA.x) * (h.y - circleSide.centerA.y) -
         (circleSide.centerB.y - circleSide.centerA.y) * (h.x - circleSide.centerA.x);
