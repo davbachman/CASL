@@ -1339,15 +1339,33 @@ function apply2DConstraints(geom, view, doc, point, w) {
             return otherPairKey === pairKey;
           });
           if (siblingPoints.length > 0) {
-            const eps2 = 1e-10;
+            const sepEps2 = 1e-10;
             const filtered = hits.filter((h) =>
               siblingPoints.every((s) => {
                 const dx = h.x - s.x;
                 const dy = h.y - s.y;
-                return dx * dx + dy * dy > eps2;
+                return dx * dx + dy * dy > sepEps2;
               }),
             );
             if (filtered.length > 0) candidates = filtered;
+            else if (hits.length > 1) {
+              let best = hits[0];
+              let bestDistSq = -Infinity;
+              for (const h of hits) {
+                let minDistSq = Infinity;
+                for (const s of siblingPoints) {
+                  const dx = h.x - s.x;
+                  const dy = h.y - s.y;
+                  const d2 = dx * dx + dy * dy;
+                  if (d2 < minDistSq) minDistSq = d2;
+                }
+                if (minDistSq > bestDistSq) {
+                  bestDistSq = minDistSq;
+                  best = h;
+                }
+              }
+              candidates = [best];
+            }
           }
         }
         const hints = point.intersectionHints;
@@ -1987,15 +2005,33 @@ function pick2DIntersection(
   if (hits.length === 0) return null;
   let candidates = hits;
   if (avoidPoints && avoidPoints.length > 0) {
-    const eps2 = 1e-10;
+    const sepEps2 = 1e-10;
     const filtered = hits.filter((h) =>
       avoidPoints.every((p) => {
         const dx = h.x - p.x;
         const dy = h.y - p.y;
-        return dx * dx + dy * dy > eps2;
+        return dx * dx + dy * dy > sepEps2;
       }),
     );
     if (filtered.length > 0) candidates = filtered;
+    else if (hits.length > 1) {
+      let best = hits[0];
+      let bestDistSq = -Infinity;
+      for (const h of hits) {
+        let minDistSq = Infinity;
+        for (const p of avoidPoints) {
+          const dx = h.x - p.x;
+          const dy = h.y - p.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < minDistSq) minDistSq = d2;
+        }
+        if (minDistSq > bestDistSq) {
+          bestDistSq = minDistSq;
+          best = h;
+        }
+      }
+      candidates = [best];
+    }
   }
   if (lineSide) {
     const filtered = candidates.filter((h) => {
