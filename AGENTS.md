@@ -25,9 +25,14 @@ Core invariants
 9. `state.showSteps` controls visibility of debug intermediates; hidden means not rendered.
 10. Menu behavior is selector-driven; keep `index.html` `data-action` values aligned with `src/main.js`.
 11. Geometry/model status text is always shown in top toolbar `#statusText`; sidebar `#toolHint` contains tool guidance only.
+12. `state.multiSelection` is the canonical shift-selection list; renderer highlighting and group-drag behavior must use this list.
+13. Custom tool overflow must stay inside the sidebar scroll container (`.sidebar`/`#customToolList`), not spill below the panel.
+14. Intersection branch picking for tool replay/constraint enforcement must avoid collapsing sibling points onto the same intersection when alternate branches exist.
 
 Interaction rules
 - Active tool may be empty (`""`): canvas clicks select existing geometry instead of constructing.
+- `Shift+click` toggles points/lines/circles in `state.multiSelection`.
+- In 2D models, dragging a selected point that belongs to a multi-selection moves all unlocked defining points from the selected refs, then re-enforces constraints.
 - `Delete` removes selected element and all later-created dependent/chronological objects in active geometry.
 - `Escape` exits tool-builder/tool-use transient states.
 - Hyperboloid: plain drag pans origin; Shift-drag rotates model.
@@ -50,4 +55,4 @@ Change hygiene rules
 Unknown
 - Automated test command: unknown.
 - Lint/format command: unknown.
-- CI pipeline and deployment workflow: unknown.
+- CI deploy workflow: GitHub Pages via `.github/workflows/deploy-pages.yml`.
