@@ -1,5 +1,7 @@
 # Compass & Straightedge Lab
 
+[Open the app on GitHub Pages](https://davbachman.github.io/CASL/)
+
 Compass & Straightedge Lab is a no-dependency browser app for geometric constructions across Euclidean, spherical, and hyperbolic models, including model switching and user-defined custom tools.
 
 ## Features At A Glance
@@ -23,20 +25,6 @@ Compass & Straightedge Lab is a no-dependency browser app for geometric construc
 - View textual construction history and print it.
 - Undo per active model’s construction document.
 - Toggle debug/intermediate custom-tool steps with Show Steps.
-
-## Run Locally
-
-From the repository root:
-
-```bash
-python3 -m http.server 8000
-```
-
-Then open:
-
-`http://localhost:8000`
-
-No build step and no npm dependencies are required for runtime.
 
 ## Interface Tour
 
@@ -329,37 +317,3 @@ Custom tools let you turn a finished construction fragment into a reusable opera
 - Falls back to download-based save.
 - Safari includes a helper save window fallback for JSON.
 - Pop-up blockers can affect print/save helper windows.
-
-## Deploy On GitHub Pages
-
-This repo includes `.github/workflows/deploy-pages.yml`, which deploys on pushes to `main`.
-
-### 1. Create Repository
-
-- Create a public GitHub repository.
-- Do not initialize it with extra starter files if this repo is already local.
-
-### 2. Push This Project
-
-Replace placeholders:
-
-```bash
-git remote add origin https://github.com/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>.git
-git push -u origin main
-```
-
-### 3. Enable GitHub Pages
-
-- In GitHub, open `Settings -> Pages`.
-- Under Build and deployment, set Source to `GitHub Actions`.
-
-### 4. Verify Deployment
-
-- Open `Actions` tab and watch `Deploy GitHub Pages`.
-- After success, app URL is:
-- `https://<YOUR_GITHUB_USERNAME>.github.io/<YOUR_REPO_NAME>/`
-
-### 5. Optional Custom Domain
-
-- Configure domain in `Settings -> Pages`.
-- Add required DNS records at your DNS provider.
