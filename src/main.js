@@ -1,4 +1,4 @@
-import { createApp } from "./app.js?v=20260209-89";
+import { createApp } from "./app.js?v=20260222-90";
 
 const deps = {
   canvas: /** @type {HTMLCanvasElement} */ (document.getElementById("canvas")),
@@ -110,6 +110,7 @@ async function runMenuAction(item) {
       window.alert(`Export image failed: ${msg}`);
     }
   }
+  if (action === "about") app.showAbout();
   if (action === "save-tools") {
     try {
       await app.saveTools();

@@ -637,6 +637,7 @@ export function createApp(deps) {
     saveConstruction,
     importConstruction: openImportConstructionDialog,
     exportImage,
+    showAbout: openAboutPopup,
     setGeometry: (geom) => {
       deps.geometrySelect.value = geom;
       applyGeometryChange(geom);
@@ -646,6 +647,61 @@ export function createApp(deps) {
     setHistoryOpen,
     isHistoryOpen,
   };
+}
+
+function openAboutPopup() {
+  const popup = window.open("", "_blank", "width=520,height=360");
+  if (!popup) {
+    window.alert("Unable to open About window. Please allow pop-ups and try again.");
+    return;
+  }
+  const repoUrl = "https://github.com/davbachman/CASL";
+  const substackUrl = "https://profbachman.substack.com";
+  popup.document.open();
+  popup.document.write(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>About</title>
+    <style>
+      body {
+        margin: 20px;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #111827;
+        line-height: 1.45;
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 20px;
+      }
+      p {
+        margin: 0 0 10px;
+      }
+      .links {
+        margin-top: 12px;
+        display: grid;
+        gap: 8px;
+      }
+      a {
+        color: #1d4ed8;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>About</h1>
+    <p>Author: David Bachman, GPT 5.3 codex</p>
+    <div class="links">
+      <a href="${escapeHtml(repoUrl)}" target="_blank" rel="noopener noreferrer">Instructions and Code</a>
+      <a href="${escapeHtml(substackUrl)}" target="_blank" rel="noopener noreferrer">Learn more about AI</a>
+    </div>
+  </body>
+</html>`);
+  popup.document.close();
+  popup.focus();
 }
 
 /** @param {unknown} value */
