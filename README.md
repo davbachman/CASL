@@ -4,6 +4,10 @@
 
 Compass & Straightedge Lab is a no-dependency browser app for geometric constructions across Euclidean, spherical, and hyperbolic models, including model switching and user-defined custom tools.
 
+Created by David Bachman with GPT-5 Codex
+
+To learn more about David Bachman and his work visit https://pzacad.pitzer.edu/~dbachman/ and subscribe to his AI substack *Entropy Bonus* at profbachman.substack.com
+
 ## Features At A Glance
 
 - Construct points, lines/geodesics, circles, and intersections.
